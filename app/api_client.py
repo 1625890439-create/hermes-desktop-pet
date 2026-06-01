@@ -8,6 +8,7 @@ import httpx
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from . import config
+from .personas import persona_manager
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +29,25 @@ class StreamWorker(QThread):
         self._abort = True
 
     def run(self):
+        # 从 persona_manager 获取当前 API 配置
+        current_persona = persona_manager.get_current()
+        
+        if current_persona:
+            endpoint = current_persona.api_endpoint
+            api_key = current_persona.api_key
+            model_name = current_persona.model_name
+        else:
+            # 回退到默认配置
+            endpoint = config.API_ENDPOINT
+            api_key = config.API_KEY
+            model_name = config.MODEL_NAME
+        
         headers = {
-            "Authorization": f"Bearer {config.API_KEY}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
         payload = {
-            "model": config.MODEL_NAME,
+            "model": model_name,
             "messages": self.messages,
             "stream": True,
         }
@@ -42,7 +56,7 @@ class StreamWorker(QThread):
             with httpx.Client(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
                 with client.stream(
                     "POST",
-                    config.API_ENDPOINT,
+                    endpoint,
                     headers=headers,
                     json=payload,
                 ) as response:
@@ -90,10 +104,35 @@ class ChatManager:
     """管理对话历史和 API 请求。"""
 
     def __init__(self):
-        self.messages: list[dict] = [
-            {"role": "system", "content": config.SYSTEM_PROMPT}
-        ]
+        self.messages: list[dict] = []
         self._worker: Optional[StreamWorker] = None
+        self._init_system_prompt()
+    
+    def _init_system_prompt(self):
+        """初始化 system prompt"""
+        current_persona = persona_manager.get_current()
+        
+        # 构建 system prompt
+        system_parts = []
+        
+        # 客户端补充的 prompt（来自人格配置）
+        if current_persona and current_persona.system_prompt:
+            system_parts.append(current_persona.system_prompt)
+        elif config.SYSTEM_PROMPT:
+            system_parts.append(config.SYSTEM_PROMPT)
+        
+        # 注入当前人格信息（帮助 Hermes 了解自己是谁）
+        if current_persona:
+            system_parts.append(f"当前人格: {current_persona.name}")
+            if current_persona.description:
+                system_parts.append(f"人格描述: {current_persona.description}")
+        
+        self.messages = [{"role": "system", "content": "\n".join(system_parts)}]
+    
+    def switch_persona(self):
+        """切换人格后重置对话历史"""
+        self._init_system_prompt()
+        logger.info("切换人格，重置对话历史")
 
     def send_message(self, user_text: str) -> StreamWorker:
         self.messages.append({"role": "user", "content": user_text})
@@ -113,4 +152,4 @@ class ChatManager:
         self.messages.append({"role": "assistant", "content": reply})
 
     def clear_history(self):
-        self.messages = [self.messages[0]]
+        self._init_system_prompt()

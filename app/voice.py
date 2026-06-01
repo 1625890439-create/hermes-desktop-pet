@@ -38,13 +38,58 @@ class TTSSpeaker(QThread):
     finished = pyqtSignal()
     error = pyqtSignal(str)
 
-    def __init__(self, text: str, provider: str = None, voice: str = None, parent=None):
+    def __init__(self, text: str, provider: str = None, voice: str = None, 
+                 api_key: str = None, endpoint: str = None, parent=None):
         super().__init__(parent)
         self.text = text
         # 延迟导入 config，避免循环引用
         from . import config
-        self.provider = provider or config.TTS_PROVIDER
-        self.voice = voice or config.TTS_VOICE
+        from .personas import persona_manager
+        
+        # 获取当前人格的语音配置
+        current_persona = persona_manager.get_current()
+        
+        # 优先级：参数 > 人格配置 > 全局配置
+        if provider:
+            self.provider = provider
+        elif current_persona and current_persona.tts_provider:
+            self.provider = current_persona.tts_provider
+        else:
+            self.provider = config.TTS_PROVIDER
+        
+        if voice:
+            self.voice = voice
+        elif current_persona and current_persona.tts_voice:
+            self.voice = current_persona.tts_voice
+        else:
+            self.voice = config.TTS_VOICE
+        
+        # API Key 和端点（用于 xiaomi 和 openai）
+        if api_key:
+            self.api_key = api_key
+        elif current_persona and current_persona.tts_api_key:
+            self.api_key = current_persona.tts_api_key
+        else:
+            # 根据 provider 选择默认 API Key
+            if self.provider == "xiaomi":
+                self.api_key = config.XIAOMI_API_KEY
+            elif self.provider == "openai":
+                self.api_key = config.OPENAI_API_KEY
+            else:
+                self.api_key = ""
+        
+        if endpoint:
+            self.endpoint = endpoint
+        elif current_persona and current_persona.tts_endpoint:
+            self.endpoint = current_persona.tts_endpoint
+        else:
+            # 根据 provider 选择默认端点
+            if self.provider == "xiaomi":
+                self.endpoint = config.XIAOMI_TTS_ENDPOINT
+            elif self.provider == "openai":
+                self.endpoint = "https://api.openai.com/v1/audio/speech"
+            else:
+                self.endpoint = ""
 
     def run(self):
         try:
@@ -81,12 +126,11 @@ class TTSSpeaker(QThread):
     def _generate_xiaomi_tts(self, path: Path):
         """小米 TTS — 通过 OpenAI 兼容接口调用。"""
         import httpx
-        from . import config
 
         resp = httpx.post(
-            config.XIAOMI_TTS_ENDPOINT,
+            self.endpoint,
             headers={
-                "Authorization": f"Bearer {config.XIAOMI_API_KEY}",
+                "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
             },
             json={
@@ -102,12 +146,11 @@ class TTSSpeaker(QThread):
     def _generate_openai_tts(self, path: Path):
         """OpenAI TTS。"""
         import httpx
-        from . import config
 
         resp = httpx.post(
-            "https://api.openai.com/v1/audio/speech",
+            self.endpoint,
             headers={
-                "Authorization": f"Bearer {config.OPENAI_API_KEY}",
+                "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
             },
             json={
@@ -123,6 +166,7 @@ class TTSSpeaker(QThread):
     def _play_audio(self, path: Path):
         """播放音频文件。"""
         if os.name == "nt":
+            # 使用 Windows MCI 命令播放音频，无需 PowerShell
             ps_cmd = (
                 f'Add-Type -AssemblyName presentationCore;'
                 f'$player = New-Object System.Windows.Media.MediaPlayer;'
@@ -134,10 +178,15 @@ class TTSSpeaker(QThread):
                 f'Start-Sleep -Seconds ($dur + 0.5);'
                 f'$player.Close()'
             )
+            # 隐藏 PowerShell 窗口
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0  # SW_HIDE
             subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_cmd],
                 capture_output=True,
                 timeout=60,
+                startupinfo=startupinfo,
             )
         else:
             for player in ["mpv", "ffplay", "aplay"]:

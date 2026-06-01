@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
 )
 
 from . import config
+from .personas import persona_manager
 
 
 # 缩放方向常量
@@ -556,3 +557,31 @@ class ChatBubble(QWidget):
             self.raise_()
             self.activateWindow()
             self._input.setFocus()
+    
+    def clear_messages(self):
+        """清空所有聊天消息（人格切换时调用）"""
+        # 遍历并删除所有消息 widget（保留最后的 stretch）
+        while self._msg_layout.count() > 1:
+            item = self._msg_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        
+        # 重置流式标签
+        self._streaming_label = None
+        
+        # 重新添加欢迎消息
+        self._add_welcome_message()
+    
+    def _add_welcome_message(self):
+        """添加欢迎消息"""
+        current_persona = persona_manager.get_current()
+        if current_persona:
+            welcome_text = f"你好，我是{current_persona.name}，有什么可以帮你的？"
+        else:
+            welcome_text = "你好，有什么可以帮你的？"
+        
+        # 使用 Hermes 格式添加消息
+        self.start_hermes_message()
+        self._streaming_label.append_text(welcome_text)
+        self._streaming_label.finish()

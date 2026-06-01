@@ -3,7 +3,7 @@
 import os
 import math
 import random
-from PyQt5.QtCore import Qt, QPoint, QTimer, QRect, QPointF
+from PyQt5.QtCore import Qt, QPoint, QTimer, QRect, QPointF, pyqtSignal
 from PyQt5.QtGui import (
     QPixmap, QPainter, QColor, QFont, QPen, QBrush,
     QPainterPath, QTransform, QRegion
@@ -11,29 +11,21 @@ from PyQt5.QtGui import (
 from PyQt5.QtWidgets import QWidget, QMenu, QAction, QApplication, QLabel
 
 from . import config
+from .personas import persona_manager
+from .greeting_bubble import GreetingBubble
 
 
 class PetWindow(QWidget):
     """透明无边框桌面宠物窗口，显示小天使插画 + 程序化动画。"""
-
-    # 皮肤注册表：名称 → 图片文件名
+    
+    # 信号：人格切换（通知 main.py 更新 API 配置）
+    persona_changed = pyqtSignal(str)  # 传递人格 ID
+    
+    # 皮肤注册表：名称 → 图片文件名（兼容旧版）
     SKINS = {
         "小天使": "angel_sprite.png",
         "帅仓鼠": "hamster.png",
     }
-
-    GREETINGS = [
-        "主人好呀～(◕ᴗ◕✿)",
-        "嘿嘿，主人来了！✧(≖ ◡ ≖✿)",
-        "想小赫了吗～♪(´ε` )",
-        "主人今天也要加油哦！(ง •̀_•́)ง",
-        "小赫一直在等你呢 (´;ω;`)",
-        "诶嘿～有什么需要帮忙的吗？",
-        "主人好！小赫好开心 (≧▽≦)",
-        "今天天气怎么样呀～",
-        "主人累了吗？要不要休息一下～",
-        "小赫随时待命！✧٩(>ω<*)و✧",
-    ]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -49,8 +41,11 @@ class PetWindow(QWidget):
         self._drag_pos: QPoint | None = None
         self._drag_moved = False
 
-        # 当前皮肤
-        self._current_skin = "小天使"
+        # 从 persona_manager 加载当前人格
+        current_persona = persona_manager.get_current()
+        self._current_skin = current_persona.skin if current_persona else "angel_sprite.png"
+        self._greetings = current_persona.greetings if current_persona else self._default_greetings()
+        self._theme_color = current_persona.theme_color if current_persona else "#B088C0"
 
         # 加载角色图片
         self._pixmap: QPixmap | None = None
@@ -70,12 +65,9 @@ class PetWindow(QWidget):
         self._anim_timer.timeout.connect(self._animate)
         self._anim_timer.setInterval(33)
 
-        # 问候气泡
-        self._greeting_text = ""
-        self._greeting_timer = QTimer(self)
-        self._greeting_timer.setSingleShot(True)
-        self._greeting_timer.timeout.connect(self._hide_greeting)
-
+        # 独立的问候气泡窗口
+        self._greeting_bubble = GreetingBubble()
+        
         # 思考状态
         self._thinking = False
 
@@ -94,12 +86,19 @@ class PetWindow(QWidget):
 
     def _load_character(self):
         """加载角色插画（单帧 PNG，自动裁剪空白边缘）。"""
-        filename = self.SKINS.get(self._current_skin, "angel_sprite.png")
+        # 支持两种方式：1) SKINS 字典中的名称 2) 直接文件名
+        if self._current_skin in self.SKINS:
+            filename = self.SKINS[self._current_skin]
+        else:
+            # 直接使用文件名（人格切换时使用）
+            filename = self._current_skin
+        
         sprite_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
             "assets", filename
         )
         if not os.path.exists(sprite_path):
+            print(f"[Pet] 形象图片不存在: {sprite_path}")
             self.setFixedSize(config.PET_WIDTH, config.PET_HEIGHT)
             return
 
@@ -111,7 +110,8 @@ class PetWindow(QWidget):
         target_h = config.PET_HEIGHT
         aspect = self._pixmap.width() / self._pixmap.height()
         target_w = max(int(target_h * aspect), 60)
-        self.setFixedSize(target_w, target_h + 40)  # +40 留给气泡空间
+        self.setFixedSize(target_w, target_h)
+        print(f"[Pet] 加载形象: {filename}")
 
     def _trim_whitespace(self, pixmap: QPixmap) -> QPixmap:
         """裁剪图片四周的灰白背景，保留核心内容。"""
@@ -231,27 +231,55 @@ class PetWindow(QWidget):
 
     # ── 问候气泡 ──
 
+    def _default_greetings(self):
+        """默认问候语"""
+        return [
+            "你好呀～(◕ᴗ◕✿)",
+            "有什么需要帮忙的吗？",
+            "我在呢，说吧～",
+        ]
+
     def show_greeting(self):
         """显示随机问候语。"""
-        self._greeting_text = random.choice(self.GREETINGS)
+        greeting_text = random.choice(self._greetings)
         # 弹跳效果
         self._bounce_vy = -8
         self.update()
-        self._greeting_timer.start(3000)
-
-    def _hide_greeting(self):
-        self._greeting_text = ""
-        self.update()
+        # 使用独立气泡显示
+        self._greeting_bubble.show_message(greeting_text, self, duration=3000)
 
     # ── 皮肤切换 ──
 
     def switch_skin(self, skin_name: str):
-        """切换到指定皮肤。"""
+        """切换到指定皮肤（兼容旧版）。"""
         if skin_name in self.SKINS and skin_name != self._current_skin:
             self._current_skin = skin_name
             self._load_character()
             self.update()
             print(f"[Pet] 切换皮肤: {skin_name}")
+    
+    def switch_persona(self, persona_id: str):
+        """切换到指定人格"""
+        if persona_manager.switch_to(persona_id):
+            persona = persona_manager.get_current()
+            if persona:
+                # 更新形象
+                self._current_skin = persona.skin
+                self._load_character()
+                
+                # 更新问候语
+                self._greetings = persona.greetings or self._default_greetings()
+                
+                # 更新主题色
+                self._theme_color = persona.theme_color
+                
+                # 发送信号通知 main.py 更新 API 配置
+                self.persona_changed.emit(persona_id)
+                
+                # 显示切换成功问候
+                self.show_greeting()
+                
+                print(f"[Pet] 切换人格: {persona.name}")
 
     # ── 鼠标事件 ──
 
@@ -303,7 +331,28 @@ class PetWindow(QWidget):
 
         menu.addSeparator()
 
-        # 皮肤切换子菜单
+        # 人格切换子菜单（新功能）
+        persona_menu = menu.addMenu("切换人格")
+        current_persona = persona_manager.get_current()
+        
+        for persona in persona_manager.get_all():
+            action = QAction(persona.name, self)
+            action.setCheckable(True)
+            action.setChecked(current_persona and persona.id == current_persona.id)
+            action.setToolTip(persona.description or persona.model_name)
+            action.triggered.connect(lambda checked, pid=persona.id: self.switch_persona(pid))
+            persona_menu.addAction(action)
+        
+        persona_menu.addSeparator()
+        
+        # 管理人格选项
+        manage_action = QAction("管理人格...", self)
+        manage_action.triggered.connect(self._open_persona_manager)
+        persona_menu.addAction(manage_action)
+
+        menu.addSeparator()
+
+        # 皮肤切换子菜单（保留旧版兼容）
         skin_menu = menu.addMenu("切换皮肤")
         for skin_name in self.SKINS:
             action = QAction(skin_name, self)
@@ -325,6 +374,12 @@ class PetWindow(QWidget):
 
     def _hide_all(self):
         pass
+    
+    def _open_persona_manager(self):
+        """打开人格管理对话框"""
+        from .persona_dialog import PersonaListDialog
+        dialog = PersonaListDialog(self)
+        dialog.exec_()
 
     # ── 绘制 ──
 
@@ -334,8 +389,8 @@ class PetWindow(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
 
         if self._pixmap and not self._pixmap.isNull():
-            # 计算绘制区域（排除气泡空间上方留白）
-            draw_h = self.height() - 40  # 气泡空间
+            # 计算绘制区域
+            draw_h = self.height()
             draw_w = self.width()
 
             # 缩放角色图
@@ -354,7 +409,7 @@ class PetWindow(QWidget):
 
             # 居中 + 浮动 + 弹跳
             x = (draw_w - scaled.width()) // 2
-            y = 40 + (draw_h - scaled.height()) // 2 + int(self._bob_offset_y + self._bounce_y)
+            y = (draw_h - scaled.height()) // 2 + int(self._bob_offset_y + self._bounce_y)
 
             # 思考时轻微左右摇摆
             if self._thinking:
@@ -372,7 +427,7 @@ class PetWindow(QWidget):
                 painter.drawLine(eye_lx - 4, eye_y, eye_lx + 4, eye_y)
                 painter.drawLine(eye_rx - 4, eye_y, eye_rx + 4, eye_y)
 
-            # 思考指示：头顶画省略号
+            # 绘制思考指示：头顶画省略号
             if self._thinking:
                 dot_y = y - 12
                 dot_x = x + target_w // 2
@@ -391,48 +446,4 @@ class PetWindow(QWidget):
             painter.setFont(QFont("Microsoft YaHei", 24))
             painter.drawText(self.rect(), Qt.AlignCenter, "👼")
 
-        # 绘制问候气泡
-        if self._greeting_text:
-            self._draw_greeting_bubble(painter)
-
         painter.end()
-
-    def _draw_greeting_bubble(self, p: QPainter):
-        """绘制问候语气泡。"""
-        font = QFont("Microsoft YaHei", 10)
-        p.setFont(font)
-        metrics = p.fontMetrics()
-        text_rect = metrics.boundingRect(
-            0, 0, 300, 100, Qt.TextWordWrap, self._greeting_text
-        )
-        padding = 10
-        bubble_w = min(text_rect.width() + padding * 2, 300)
-        bubble_h = text_rect.height() + padding * 2
-
-        # 气泡位置（窗口顶部）
-        bubble_x = (self.width() - bubble_w) // 2
-        bubble_y = 2
-
-        # 绘制气泡背景
-        p.setPen(QPen(QColor("#E0D0F0"), 1.5))
-        p.setBrush(QBrush(QColor(255, 255, 255, 235)))
-        path = QPainterPath()
-        r = 10
-        path.addRoundedRect(bubble_x, bubble_y, bubble_w, bubble_h, r, r)
-
-        # 小三角指向角色
-        tri_x = self.width() // 2
-        tri_top = bubble_y + bubble_h
-        path.moveTo(tri_x - 6, tri_top)
-        path.lineTo(tri_x, tri_top + 8)
-        path.lineTo(tri_x + 6, tri_top)
-
-        p.drawPath(path)
-
-        # 绘制文字
-        p.setPen(QColor("#2D2D2D"))
-        p.drawText(
-            bubble_x + padding, bubble_y + padding,
-            text_rect.width(), text_rect.height(),
-            Qt.TextWordWrap, self._greeting_text
-        )

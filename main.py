@@ -12,6 +12,7 @@ from app.chat_bubble import ChatBubble
 from app.tray_icon import TrayIcon
 from app.api_client import ChatManager
 from app.voice import TTSSpeaker, STTListener
+from app.personas import persona_manager
 
 # 日志配置
 logging.basicConfig(
@@ -40,6 +41,27 @@ def main():
     chat = ChatBubble()
     tray = TrayIcon()
     chat_mgr = ChatManager()
+
+    # ── 人格切换处理 ──
+    
+    def on_persona_changed(persona_id: str):
+        """人格切换回调"""
+        logger.info(f"切换人格: {persona_id}")
+        
+        # 更新聊天管理器的 system prompt
+        chat_mgr.switch_persona()
+        
+        # 更新窗口标题
+        current = persona_manager.get_current()
+        if current:
+            chat.setWindowTitle(f"Hermes - {current.name}")
+        
+        # 清空聊天显示
+        chat.clear_messages()
+        
+        logger.info(f"人格切换完成: {current.name if current else '未知'}")
+    
+    pet.persona_changed.connect(on_persona_changed)
 
     # ── 位置追踪：聊天窗口跟随宠物移动 ──
 
