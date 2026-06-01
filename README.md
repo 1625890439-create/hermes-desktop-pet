@@ -1,6 +1,6 @@
 # 🧚 Hermes Desktop Pet（小赫桌面宠物）
 
-一个可爱的桌面宠物应用，集成 Hermes AI Agent，支持文字对话、语音交互、皮肤切换。
+一个可爱的桌面宠物应用，集成 Hermes AI Agent，支持文字对话、语音交互、**多人格切换**。
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
 ![PyQt5](https://img.shields.io/badge/PyQt5-5.15-green)
@@ -11,7 +11,9 @@
 - 🎨 **桌面宠物** — 透明无边框窗口，始终置顶，可拖拽移动
 - 💬 **AI 对话** — 集成 Hermes Agent，支持流式打字效果
 - 🎤 **语音交互** — 麦克风输入 + TTS 语音播报（可开关）
+- 🎭 **人格切换** — 支持多个人格，每个人格独立的 API、形象、音色
 - 🔄 **皮肤切换** — 右键菜单切换不同角色形象
+- 💬 **独立气泡** — 问候气泡浮动在宠物上方，清晰可见
 - ✂️ **智能裁剪** — 自动裁剪图片白底，保留核心内容
 - 🎭 **程序化动画** — 上下浮动、呼吸缩放、随机眨眼、点击弹跳
 - 💭 **互动反馈** — 点击弹出随机问候语，等待回复时有思考动画
@@ -35,6 +37,8 @@ pip install -r requirements.txt
 
 ### 3. 配置
 
+#### 环境变量
+
 复制环境变量示例文件并按需修改：
 
 ```bash
@@ -52,6 +56,34 @@ cp .env.example .env
 | `CHAT_WIDTH` | `360` | 聊天窗口宽度 |
 | `TTS_PROVIDER` | `edge-tts` | 语音合成引擎 |
 | `STT_PROVIDER` | `google` | 语音识别引擎 |
+
+#### 人格配置
+
+复制人格配置示例文件：
+
+```bash
+cp personas.example.json personas.json
+```
+
+编辑 `personas.json`，配置你的人格：
+
+```json
+{
+  "current_id": "xiaohe",
+  "personas": [
+    {
+      "id": "xiaohe",
+      "name": "小赫",
+      "api_endpoint": "http://localhost:8643/v1/chat/completions",
+      "api_key": "your-api-key",
+      "model_name": "desktop-pet",
+      "skin": "angel_sprite.png",
+      "tts_provider": "edge-tts",
+      "tts_voice": "zh-CN-XiaoxiaoNeural"
+    }
+  ]
+}
+```
 
 ### 4. 启动
 
@@ -76,29 +108,60 @@ python main.py
 
 - **显示/隐藏聊天** — 切换聊天窗口
 - **隐藏小赫** — 隐藏宠物和聊天窗口（从托盘恢复）
+- **切换人格** — 切换不同人格（形象、音色、API 都会切换）
 - **切换皮肤** — 选择不同角色形象
 - **退出** — 关闭应用
 
-### 皮肤切换
+### 🎭 人格切换（新功能！）
+
+人格切换是核心功能，每个人格拥有：
+- **独立的 API** — 连接不同的 Hermes Profile
+- **独立的形象** — 切换时宠物外观自动变化
+- **独立的音色** — 每个人格可以说不同的声音
+- **独立的问候语** — 不同人格有不同的打招呼方式
+
+#### 使用方法：
 
 1. 右键点击宠物
-2. 选择「切换皮肤」
-3. 选择想要的角色形象
+2. 选择「切换人格」
+3. 选择目标人格（如"小赫"或"心语导师"）
+4. 宠物形象、音色、API 自动切换
 
-**添加自定义皮肤：**
+#### 管理人格：
 
-1. 将角色图片（PNG）放入 `assets/` 目录
-2. 编辑 `app/pet_window.py`，在 `SKINS` 字典中添加：
+1. 右键 → 切换人格 → 管理人格...
+2. 点击「添加新人格」
+3. 填写配置：
+   - **ID**: 英文标识（如 `stock-analyst`）
+   - **名称**: 显示名称（如"股票分析师"）
+   - **API Endpoint**: Hermes API 地址
+   - **API Key**: API 密钥
+   - **Model Name**: 对应的 Hermes Profile 名称
+   - **形象图片**: 选择图片（需放在 `assets/` 目录）
+   - **语音配置**: TTS 提供商、音色等
 
-```python
-SKINS = {
-    "小天使": "angel_sprite.png",
-    "帅仓鼠": "hamster.png",
-    "你的角色": "your_image.png",  # 添加这行
-}
-```
+## 🎤 语音配置
 
-3. 重启应用
+每个人格可以独立配置语音：
+
+| 配置项 | 说明 | 示例 |
+|--------|------|------|
+| `tts_provider` | TTS 提供商 | `edge-tts`, `xiaomi`, `openai` |
+| `tts_voice` | 音色名称 | `zh-CN-XiaoxiaoNeural`, `alloy` |
+| `tts_api_key` | API Key（可选） | 覆盖全局配置 |
+| `tts_endpoint` | API 端点（可选） | 覆盖全局配置 |
+
+### 支持的音色
+
+#### edge-tts（免费）
+- **女声**: `zh-CN-XiaoxiaoNeural`, `zh-CN-XiaoyiNeural`, `zh-CN-XiaohanNeural`
+- **男声**: `zh-CN-YunxiNeural`, `zh-CN-YunyangNeural`, `zh-CN-YunjianNeural`
+
+#### openai
+- `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`
+
+#### xiaomi
+- `tts-1`
 
 ## 🔧 配置详解
 
@@ -182,10 +245,14 @@ hermes-desktop-pet/
 │   ├── pet_window.py    # 桌面宠物窗口（动画 + 皮肤）
 │   ├── chat_bubble.py   # 聊天气泡窗口
 │   ├── tray_icon.py     # 系统托盘图标
-│   └── voice.py         # 语音模块（TTS + STT）
+│   ├── voice.py         # 语音模块（TTS + STT）
+│   ├── personas.py      # 人格配置管理
+│   ├── persona_dialog.py # 人格管理对话框
+│   └── greeting_bubble.py # 独立问候气泡
 ├── assets/              # 角色图片资源
 │   ├── angel_sprite.png
 │   └── hamster.png
+├── personas.example.json # 人格配置示例
 ├── requirements.txt     # Python 依赖
 ├── .env.example         # 环境变量示例
 ├── 启动小赫.bat          # Windows 启动脚本
@@ -242,6 +309,22 @@ hermes profile create desktop-pet
 hermes gateway start --profile desktop-pet --port 8643
 ```
 
+### 方式三：创建多个人格 Profile
+
+如果你想要多个人格，可以创建多个 Profile：
+
+```bash
+# 创建小赫
+hermes profile create xiaohe
+hermes gateway start --profile xiaohe --port 8643
+
+# 创建心语导师
+hermes profile create psychologist
+hermes gateway start --profile psychologist --port 8644
+```
+
+然后在 `personas.json` 中配置对应的 API 地址。
+
 ## ❓ 常见问题
 
 ### PyAudio 安装问题
@@ -270,6 +353,18 @@ pip install PyAudio‑0.2.13‑cp310‑cp310‑win_amd64.whl
 2. 检查端口是否正确：`curl http://localhost:8643/v1/models`
 3. 检查 API 密钥是否匹配
 
+### 人格切换后没有变化
+
+1. 检查 `personas.json` 配置是否正确
+2. 确认对应的 Hermes Gateway 正在运行
+3. 查看控制台输出，应该会显示 `[Pet] 加载形象: xxx.png`
+
+### 问候气泡看不到
+
+1. 问候气泡会自动显示 3 秒后消失
+2. 点击宠物或切换人格时会触发
+3. 如果还是看不到，检查是否有其他窗口遮挡
+
 ### 白底问题
 
 如果角色图片有白底：
@@ -277,25 +372,43 @@ pip install PyAudio‑0.2.13‑cp310‑cp310‑win_amd64.whl
 1. **最佳方案**：使用透明底的 PNG 图片
 2. **自动处理**：应用会自动裁剪灰白色背景，但边缘可能有残边
 
+## 🎨 自定义开发
+
+### 添加新人格
+
+1. 准备角色图片（推荐透明底 PNG），放入 `assets/` 目录
+2. 右键宠物 → 切换人格 → 管理人格...
+3. 点击「添加新人格」
+4. 填写配置并保存
+
 ### 添加新皮肤
 
 1. 准备角色图片（推荐透明底 PNG）
 2. 放入 `assets/` 目录
-3. 编辑 `app/pet_window.py` 的 `SKINS` 字典
-4. 重启应用
+3. 编辑 `app/pet_window.py` 的 `SKINS` 字典：
 
-## 🎨 自定义开发
+```python
+SKINS = {
+    "小天使": "angel_sprite.png",
+    "帅仓鼠": "hamster.png",
+    "你的角色": "your_image.png",  # 添加这行
+}
+```
+
+4. 重启应用
 
 ### 修改问候语
 
-编辑 `app/pet_window.py` 中的 `GREETINGS` 列表：
+人格的问候语在 `personas.json` 中配置：
 
-```python
-GREETINGS = [
+```json
+{
+  "greetings": [
     "主人好呀～(◕ᴗ◕✿)",
     "你的自定义问候语",
-    # ...
-]
+    "..."
+  ]
+}
 ```
 
 ### 修改动画参数
@@ -330,6 +443,7 @@ COLOR_BUBBLE_BORDER: str = "#E0D0F0"  # 气泡边框颜色
 - v0.3 — 语音交互（TTS + STT）
 - v0.4 — 皮肤切换，智能裁剪，程序化动画
 - v0.5 — 环境变量配置，可移植性提升
+- v0.6 — **人格切换系统**，独立语音配置，独立问候气泡
 
 ## 📄 许可证
 
