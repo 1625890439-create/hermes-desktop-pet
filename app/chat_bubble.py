@@ -1,0 +1,558 @@
+"""聊天气泡组件 — 对话界面（支持文字选择 + 窗口缩放）"""
+
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize, QPoint
+from PyQt5.QtGui import QFont, QColor, QPainter, QPainterPath, QPen, QBrush, QCursor
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
+    QScrollArea, QLabel, QFrame, QApplication, QSizePolicy
+)
+
+from . import config
+
+
+# 缩放方向常量
+_RESIZE_MARGIN = 8  # 边缘拖拽区域宽度
+
+
+class MessageLabel(QLabel):
+    """单条消息标签，支持圆角背景和文字选择。"""
+
+    def __init__(self, text: str, is_user: bool, parent=None):
+        super().__init__(parent)
+        self.is_user = is_user
+        self.setWordWrap(True)
+        self.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
+        self.setMargin(0)
+
+        font = QFont(config.FONT_FAMILY, config.FONT_SIZE_CHAT)
+        self.setFont(font)
+
+        self._full_text = text
+        self.setText(text)
+        self._apply_style()
+
+    def _apply_style(self):
+        bg = config.COLOR_USER_MSG if self.is_user else config.COLOR_HERMES_MSG
+        self.setStyleSheet(f"""
+            QLabel {{
+                background-color: {bg};
+                color: {config.COLOR_TEXT};
+                border-radius: 12px;
+                padding: 8px 12px;
+                font-family: {config.FONT_FAMILY};
+                font-size: {config.FONT_SIZE_CHAT}px;
+                selection-background-color: #C8A8E8;
+            }}
+        """)
+
+
+class StreamingLabel(QLabel):
+    """Hermes 流式回复标签，支持逐字追加，结束后可选中复制。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._buffer = ""
+        self._finished = False
+        self.setWordWrap(True)
+        font = QFont(config.FONT_FAMILY, config.FONT_SIZE_CHAT)
+        self.setFont(font)
+        self.setStyleSheet(f"""
+            QLabel {{
+                background-color: {config.COLOR_HERMES_MSG};
+                color: {config.COLOR_TEXT};
+                border-radius: 12px;
+                padding: 8px 12px;
+                font-family: {config.FONT_FAMILY};
+                font-size: {config.FONT_SIZE_CHAT}px;
+                selection-background-color: #C8A8E8;
+            }}
+        """)
+        self.setText("")
+
+    def append_text(self, text: str):
+        self._buffer += text
+        self.setText(self._buffer)
+
+    def get_full_text(self) -> str:
+        return self._buffer
+
+    def finish(self):
+        """流式结束，启用文字选择。"""
+        self._finished = True
+        self.setText(self._buffer)
+        self.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
+
+
+class ChatBubble(QWidget):
+    """聊天气泡窗口，支持文字复制和手动缩放。"""
+    # 信号：用户发送了消息 / 语音输入 / 语音开关
+    message_sent = pyqtSignal(str)
+    mic_clicked = pyqtSignal()        # 麦克风按钮点击
+    voice_toggled = pyqtSignal(bool)  # 语音播报开关
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Hermes 聊天")
+        self.setWindowFlags(
+            Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+            | Qt.Tool
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+        # 最小尺寸 + 可缩放
+        self.setMinimumSize(280, 360)
+        self.resize(config.CHAT_WIDTH, config.CHAT_HEIGHT)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        # 缩放状态
+        self._resize_edge = None
+        self._resize_start_pos = None
+        self._resize_start_geo = None
+        self._hover_edge = None  # 悬停的边缘
+
+        self._streaming_label: StreamingLabel | None = None
+        self._setup_ui()
+
+    def _setup_ui(self):
+        # 外层容器 — 用布局填充整个窗口，跟随缩放
+        self._container = QWidget(self)
+        self._container.setStyleSheet(f"""
+            QWidget {{
+                background-color: {config.COLOR_BUBBLE_BG};
+                border: 1.5px solid {config.COLOR_BUBBLE_BORDER};
+                border-radius: 16px;
+            }}
+        """)
+
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.addWidget(self._container)
+
+        layout = QVBoxLayout(self._container)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(6)
+
+        # 标题栏（可拖拽移动窗口）
+        self._title_bar = QWidget()
+        self._title_bar.setFixedHeight(32)
+        self._title_bar.setStyleSheet("background: transparent; border: none;")
+        title_layout = QHBoxLayout(self._title_bar)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+
+        title_label = QLabel("💬 Hermes 助手")
+        title_label.setFont(QFont(config.FONT_FAMILY, 13, QFont.Bold))
+        title_label.setStyleSheet(f"color: {config.COLOR_TEXT}; border: none; background: transparent;")
+        title_layout.addWidget(title_label)
+        title_layout.addStretch()
+
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(28, 28)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent; border: none;
+                font-size: 16px; color: #999; border-radius: 14px;
+            }
+            QPushButton:hover { background-color: #FF6B6B; color: white; }
+        """)
+        close_btn.clicked.connect(self.hide)
+        title_layout.addWidget(close_btn)
+        layout.addWidget(self._title_bar)
+
+        # 上下文信息栏
+        self._context_label = QLabel("")
+        self._context_label.setFont(QFont(config.FONT_FAMILY, 10))
+        self._context_label.setStyleSheet(
+            f"color: {config.COLOR_TEXT_SECONDARY}; border: none; background: transparent; padding: 0 4px;"
+        )
+        layout.addWidget(self._context_label)
+
+        # 分隔线
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet(f"background-color: {config.COLOR_BUBBLE_BORDER}; max-height: 1px; border: none;")
+        layout.addWidget(sep)
+
+        # 消息滚动区域
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setStyleSheet("""
+            QScrollArea { border: none; background: transparent; }
+            QScrollBar:vertical { width: 6px; background: transparent; }
+            QScrollBar::handle:vertical { background: #C0B0D0; border-radius: 3px; min-height: 20px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+        """)
+
+        self._msg_container = QWidget()
+        self._msg_container.setStyleSheet("background: transparent; border: none;")
+        self._msg_layout = QVBoxLayout(self._msg_container)
+        self._msg_layout.setContentsMargins(4, 4, 4, 4)
+        self._msg_layout.setSpacing(8)
+        self._msg_layout.addStretch()
+
+        self._scroll.setWidget(self._msg_container)
+        layout.addWidget(self._scroll, 1)
+
+        # 底部输入区域
+        input_bar = QHBoxLayout()
+        input_bar.setSpacing(6)
+
+        self._input = QTextEdit()
+        self._input.setPlaceholderText("输入消息...")
+        self._input.setFixedHeight(44)
+        self._input.setFont(QFont(config.FONT_FAMILY, config.FONT_SIZE_INPUT))
+        self._input.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {config.COLOR_INPUT_BG};
+                border: 1.5px solid {config.COLOR_INPUT_BORDER};
+                border-radius: 12px;
+                padding: 6px 12px;
+                font-family: {config.FONT_FAMILY};
+                font-size: {config.FONT_SIZE_INPUT}px;
+                color: {config.COLOR_TEXT};
+            }}
+            QTextEdit:focus {{ border-color: {config.COLOR_SEND_BTN}; }}
+        """)
+        self._input.installEventFilter(self)
+        input_bar.addWidget(self._input, 1)
+
+        self._send_btn = QPushButton("发送")
+        self._send_btn.setFixedSize(60, 44)
+        self._send_btn.setCursor(Qt.PointingHandCursor)
+        self._send_btn.setFont(QFont(config.FONT_FAMILY, config.FONT_SIZE_INPUT, QFont.Bold))
+        self._send_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {config.COLOR_SEND_BTN};
+                color: white; border: none; border-radius: 12px;
+                font-family: {config.FONT_FAMILY};
+                font-size: {config.FONT_SIZE_INPUT}px;
+            }}
+            QPushButton:hover {{ background-color: {config.COLOR_SEND_BTN_HOVER}; }}
+            QPushButton:pressed {{ background-color: #8060A0; }}
+        """)
+        self._send_btn.clicked.connect(self._on_send)
+        input_bar.addWidget(self._send_btn)
+
+        # 麦克风按钮
+        self._mic_btn = QPushButton("🎤")
+        self._mic_btn.setFixedSize(44, 44)
+        self._mic_btn.setCursor(Qt.PointingHandCursor)
+        self._mic_btn.setToolTip("语音输入（点击后说话）")
+        self._mic_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #F0E6FF;
+                border: 1.5px solid #D0C0E0;
+                border-radius: 12px;
+                font-size: 18px;
+            }
+            QPushButton:hover { background-color: #E0D0F5; }
+            QPushButton:pressed { background-color: #D0C0E8; }
+        """)
+        self._mic_btn.clicked.connect(self._on_mic)
+        input_bar.addWidget(self._mic_btn)
+
+        # 语音播报开关
+        self._voice_btn = QPushButton("🔊")
+        self._voice_btn.setFixedSize(44, 44)
+        self._voice_btn.setCursor(Qt.PointingHandCursor)
+        self._voice_btn.setToolTip("语音播报开关")
+        self._voice_btn.setCheckable(True)
+        self._voice_btn.setChecked(True)
+        self._voice_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #E8F5E9;
+                border: 1.5px solid #C8E6C9;
+                border-radius: 12px;
+                font-size: 18px;
+            }
+            QPushButton:checked { background-color: #C8E6C9; border-color: #A5D6A7; }
+            QPushButton:hover { background-color: #DCEDC8; }
+        """)
+        self._voice_btn.clicked.connect(self._on_voice_toggle)
+        input_bar.addWidget(self._voice_btn)
+
+        layout.addLayout(input_bar)
+
+    # ── 标题栏拖拽移动窗口 ──
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            # 检查是否在边缘区域（缩放）
+            edge = self._get_resize_edge(event.pos())
+            if edge:
+                self._resize_edge = edge
+                self._resize_start_pos = event.globalPos()
+                self._resize_start_geo = self.geometry()
+                event.accept()
+                return
+
+            # 标题栏区域拖拽移动
+            if event.pos().y() < self._title_bar.height() + 10:
+                self._drag_pos = event.globalPos() - self.frameGeometry().topLeft()
+                event.accept()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton:
+            # 缩放处理
+            if self._resize_edge and self._resize_start_geo:
+                self._do_resize(event.globalPos())
+                event.accept()
+                return
+
+            # 拖拽移动
+            if hasattr(self, '_drag_pos') and self._drag_pos:
+                self.move(event.globalPos() - self._drag_pos)
+                event.accept()
+                return
+
+        # 更新鼠标样式（悬停边缘时）
+        edge = self._get_resize_edge(event.pos())
+        if edge != self._hover_edge:
+            self._hover_edge = edge
+            self.update()  # 触发重绘
+        if edge:
+            cursors = {
+                "left": Qt.SizeHorCursor, "right": Qt.SizeHorCursor,
+                "top": Qt.SizeVerCursor, "bottom": Qt.SizeVerCursor,
+                "top-left": Qt.SizeFDiagCursor, "top-right": Qt.SizeBDiagCursor,
+                "bottom-left": Qt.SizeBDiagCursor, "bottom-right": Qt.SizeFDiagCursor,
+            }
+            self.setCursor(cursors.get(edge, Qt.ArrowCursor))
+        else:
+            self.setCursor(Qt.ArrowCursor)
+
+    def mouseReleaseEvent(self, event):
+        self._resize_edge = None
+        self._resize_start_pos = None
+        self._resize_start_geo = None
+        if hasattr(self, '_drag_pos'):
+            self._drag_pos = None
+        event.accept()
+
+    def leaveEvent(self, event):
+        """鼠标离开窗口时清除边缘高亮。"""
+        if self._hover_edge:
+            self._hover_edge = None
+            self.setCursor(Qt.ArrowCursor)
+            self.update()
+
+    def _get_resize_edge(self, pos: QPoint) -> str | None:
+        """判断鼠标位置是否在窗口边缘。"""
+        w, h = self.width(), self.height()
+        m = _RESIZE_MARGIN
+        x, y = pos.x(), pos.y()
+
+        left = x < m
+        right = x > w - m
+        top = y < m
+        bottom = y > h - m
+
+        if top and left: return "top-left"
+        if top and right: return "top-right"
+        if bottom and left: return "bottom-left"
+        if bottom and right: return "bottom-right"
+        if left: return "left"
+        if right: return "right"
+        if top: return "top"
+        if bottom: return "bottom"
+        return None
+
+    def _do_resize(self, global_pos: QPoint):
+        """执行缩放。"""
+        dx = global_pos.x() - self._resize_start_pos.x()
+        dy = global_pos.y() - self._resize_start_pos.y()
+        geo = self._resize_start_geo
+        min_w, min_h = self.minimumWidth(), self.minimumHeight()
+
+        x, y, w, h = geo.x(), geo.y(), geo.width(), geo.height()
+
+        edge = self._resize_edge
+        if "right" in edge:
+            w = max(min_w, geo.width() + dx)
+        if "bottom" in edge:
+            h = max(min_h, geo.height() + dy)
+        if "left" in edge:
+            new_w = max(min_w, geo.width() - dx)
+            x = geo.x() + geo.width() - new_w
+            w = new_w
+        if "top" in edge:
+            new_h = max(min_h, geo.height() - dy)
+            y = geo.y() + geo.height() - new_h
+            h = new_h
+
+        self.setGeometry(x, y, w, h)
+
+    # ── 其他逻辑 ──
+
+    def eventFilter(self, obj, event):
+        from PyQt5.QtCore import QEvent
+        if obj is self._input and event.type() == QEvent.KeyPress:
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                if not (event.modifiers() & Qt.ShiftModifier):
+                    self._on_send()
+                    return True
+        return super().eventFilter(obj, event)
+
+    def _on_send(self):
+        text = self._input.toPlainText().strip()
+        if not text:
+            return
+        self._input.clear()
+        self.add_user_message(text)
+        self.message_sent.emit(text)
+
+    def _on_mic(self):
+        """麦克风按钮点击。"""
+        self._mic_btn.setEnabled(False)
+        self._mic_btn.setText("🔴")
+        self._mic_btn.setToolTip("正在听...")
+        self.mic_clicked.emit()
+
+    def mic_recording_done(self):
+        """录音结束，恢复按钮状态。"""
+        self._mic_btn.setEnabled(True)
+        self._mic_btn.setText("🎤")
+        self._mic_btn.setToolTip("语音输入（点击后说话）")
+
+    def mic_recording_error(self, msg: str):
+        """录音出错。"""
+        self.mic_recording_done()
+        self.add_error_message(msg)
+
+    def _on_voice_toggle(self):
+        """语音播报开关切换。"""
+        enabled = self._voice_btn.isChecked()
+        self._voice_btn.setText("🔊" if enabled else "🔇")
+        self._voice_btn.setToolTip("语音播报: " + ("开" if enabled else "关"))
+        self.voice_toggled.emit(enabled)
+
+    def voice_enabled(self) -> bool:
+        return self._voice_btn.isChecked()
+
+    def _scroll_to_bottom(self):
+        QTimer.singleShot(50, lambda: self._scroll.verticalScrollBar().setValue(
+            self._scroll.verticalScrollBar().maximum()
+        ))
+
+    def add_user_message(self, text: str):
+        wrapper = QWidget()
+        wrapper.setStyleSheet("background: transparent; border: none;")
+        w_layout = QHBoxLayout(wrapper)
+        w_layout.setContentsMargins(30, 2, 0, 2)
+
+        label = MessageLabel(text, is_user=True)
+        label.setMaximumWidth(260)
+        w_layout.addWidget(label)
+        w_layout.addStretch()
+
+        self._msg_layout.insertWidget(self._msg_layout.count() - 1, wrapper)
+        self._scroll_to_bottom()
+
+    def start_hermes_message(self):
+        wrapper = QWidget()
+        wrapper.setStyleSheet("background: transparent; border: none;")
+        w_layout = QHBoxLayout(wrapper)
+        w_layout.setContentsMargins(0, 2, 30, 2)
+
+        avatar = QLabel("🌸")
+        avatar.setFixedSize(28, 28)
+        avatar.setAlignment(Qt.AlignCenter)
+        avatar.setStyleSheet("""
+            QLabel {
+                background-color: #F0E6FF;
+                border-radius: 14px;
+                font-size: 14px;
+                border: none;
+            }
+        """)
+        w_layout.addWidget(avatar, 0, Qt.AlignTop)
+
+        self._streaming_label = StreamingLabel()
+        self._streaming_label.setMinimumWidth(60)
+        self._streaming_label.setMaximumWidth(260)
+        w_layout.addWidget(self._streaming_label, 1)
+        w_layout.addStretch()
+
+        self._msg_layout.insertWidget(self._msg_layout.count() - 1, wrapper)
+        self._scroll_to_bottom()
+        return self._streaming_label
+
+    def append_streaming_text(self, text: str):
+        if self._streaming_label:
+            self._streaming_label.append_text(text)
+            self._scroll_to_bottom()
+
+    def finish_streaming(self):
+        if self._streaming_label:
+            self._streaming_label.finish()
+            reply_text = self._streaming_label.get_full_text()
+            self._streaming_label = None
+            return reply_text
+        return ""
+
+    def add_error_message(self, text: str):
+        wrapper = QWidget()
+        wrapper.setStyleSheet("background: transparent; border: none;")
+        w_layout = QHBoxLayout(wrapper)
+        w_layout.setContentsMargins(0, 2, 30, 2)
+
+        label = QLabel(f"⚠️ {text}")
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        label.setFont(QFont(config.FONT_FAMILY, config.FONT_SIZE_LABEL))
+        label.setStyleSheet("""
+            QLabel {
+                background-color: #FFF0F0;
+                color: #CC4444;
+                border: 1px solid #FFD0D0;
+                border-radius: 10px;
+                padding: 8px 12px;
+            }
+        """)
+        label.setMaximumWidth(280)
+        w_layout.addWidget(label)
+        w_layout.addStretch()
+
+        self._msg_layout.insertWidget(self._msg_layout.count() - 1, wrapper)
+        self._scroll_to_bottom()
+
+    def update_context_info(self, msg_count: int, char_count: int):
+        est_tokens = int(char_count * 1.2)
+        self._context_label.setText(f"💬 {msg_count} 条消息 · ~{est_tokens} tokens")
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self._hover_edge:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        m = _RESIZE_MARGIN
+        w, h = self.width(), self.height()
+        color = QColor(176, 136, 192, 120)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(color))
+        edge = self._hover_edge
+        if "left" in edge:
+            p.drawRect(0, 0, m, h)
+        if "right" in edge:
+            p.drawRect(w - m, 0, m, h)
+        if "top" in edge:
+            p.drawRect(0, 0, w, m)
+        if "bottom" in edge:
+            p.drawRect(0, h - m, w, m)
+        p.end()
+
+    def toggle_visibility(self):
+        if self.isVisible():
+            self.hide()
+        else:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+            self._input.setFocus()

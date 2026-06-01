@@ -1,0 +1,5 @@
+PyQt5>=5.15
+httpx>=0.27
+edge-tts>=6.1
+SpeechRecognition>=3.10
+PyAudio>=0.2
