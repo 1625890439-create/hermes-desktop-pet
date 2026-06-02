@@ -125,7 +125,7 @@ class PersonaDialog(QDialog):
         
         # API Key
         self.key_input = QLineEdit()
-        self.key_input.setPlaceholderText("desktop-pet-key-2026")
+        self.key_input.setPlaceholderText("为空则不需要验证")
         form.addRow("API Key:", self.key_input)
         
         # Model Name

@@ -50,7 +50,7 @@ cp .env.example .env
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `HERMES_API_ENDPOINT` | `http://localhost:8643/v1/chat/completions` | Hermes API 地址 |
-| `HERMES_DESKTOP_PET_KEY` | `desktop-pet-key-2026` | API 密钥 |
+| `HERMES_DESKTOP_PET_KEY` | （空，不需要验证） | API 密钥 |
 | `HERMES_MODEL_NAME` | `desktop-pet` | 模型名称 |
 | `PET_HEIGHT` | `200` | 宠物显示高度（像素） |
 | `CHAT_WIDTH` | `360` | 聊天窗口宽度 |
@@ -262,6 +262,51 @@ hermes-desktop-pet/
 ## 🔌 前置依赖：Hermes Agent Gateway
 
 桌面宠物需要连接到运行中的 Hermes Agent Gateway。
+
+### 如何查看 Hermes API 配置
+
+在运行 Hermes 的机器上执行以下命令，获取桌面宠物需要的三个配置项：
+
+```bash
+# 查看所有 profile 的 API 配置
+for d in ~/.hermes/profiles/*/; do
+  name=$(basename "$d")
+  if [ -f "$d/.env" ]; then
+    port=$(grep API_SERVER_PORT "$d/.env" | cut -d= -f2)
+    key=$(grep API_SERVER_KEY "$d/.env" | cut -d= -f2)
+    model=$(grep API_SERVER_MODEL_NAME "$d/.env" | cut -d= -f2)
+    echo "[$name] 地址: http://localhost:$port | Key: $key | Model: $model"
+  fi
+done
+
+# 主 profile（默认）
+grep -E "API_SERVER_(PORT|KEY|MODEL_NAME)" ~/.hermes/.env
+```
+
+输出示例：
+```
+[desktop-pet] 地址: http://localhost:8643 | Key: desktop-pet-key-2026 | Model: desktop-pet
+[psychologist] 地址: http://localhost:8644 | Key: | Model: psychologist
+```
+
+对应桌面宠物配置：
+- `HERMES_API_ENDPOINT` = `http://<地址>/v1/chat/completions`
+- `HERMES_DESKTOP_PET_KEY` = `Key`（为空则不需要配置）
+- `HERMES_MODEL_NAME` = `Model`
+
+> **注意**：如果 Hermes 运行在另一台机器上，把 `localhost` 改为那台机器的 IP 地址。
+
+> **安全限制**：Hermes API Server 绑定到 `0.0.0.0`（允许外部访问）时，必须设置 `API_SERVER_KEY`，否则拒绝启动。如果不需要远程访问，把 `API_SERVER_HOST` 改为 `127.0.0.1` 即可不设 key。
+> 
+> ```bash
+> # 本地访问（不需要 key）
+> API_SERVER_HOST=127.0.0.1
+> API_SERVER_KEY=
+> 
+> # 允许外部访问（必须设 key）
+> API_SERVER_HOST=0.0.0.0
+> API_SERVER_KEY=your-secret-key
+> ```
 
 ### 方式一：使用现有 Hermes 实例
 

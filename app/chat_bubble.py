@@ -18,9 +18,10 @@ _RESIZE_MARGIN = 8  # 边缘拖拽区域宽度
 class MessageLabel(QLabel):
     """单条消息标签，支持圆角背景和文字选择。"""
 
-    def __init__(self, text: str, is_user: bool, parent=None):
+    def __init__(self, text: str, is_user: bool, theme_color: str = "#B088C0", parent=None):
         super().__init__(parent)
         self.is_user = is_user
+        self._theme_color = theme_color
         self.setWordWrap(True)
         self.setTextInteractionFlags(
             Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
@@ -35,7 +36,7 @@ class MessageLabel(QLabel):
         self._apply_style()
 
     def _apply_style(self):
-        bg = config.COLOR_USER_MSG if self.is_user else config.COLOR_HERMES_MSG
+        bg = config.COLOR_USER_MSG if self.is_user else self._lighten_color(self._theme_color, 1.6)
         self.setStyleSheet(f"""
             QLabel {{
                 background-color: {bg};
@@ -48,20 +49,32 @@ class MessageLabel(QLabel):
             }}
         """)
 
+    @staticmethod
+    def _lighten_color(hex_color: str, factor: float) -> str:
+        """将颜色变浅"""
+        hex_color = hex_color.lstrip('#')
+        r, g, b = int(hex_color[:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+        r = min(255, int(r * factor))
+        g = min(255, int(g * factor))
+        b = min(255, int(b * factor))
+        return f"#{r:02x}{g:02x}{b:02x}"
+
 
 class StreamingLabel(QLabel):
     """Hermes 流式回复标签，支持逐字追加，结束后可选中复制。"""
 
-    def __init__(self, parent=None):
+    def __init__(self, theme_color: str = "#B088C0", parent=None):
         super().__init__(parent)
         self._buffer = ""
+        self._theme_color = theme_color
         self._finished = False
         self.setWordWrap(True)
         font = QFont(config.FONT_FAMILY, config.FONT_SIZE_CHAT)
         self.setFont(font)
+        bg = self._lighten_color(theme_color, 1.6)
         self.setStyleSheet(f"""
             QLabel {{
-                background-color: {config.COLOR_HERMES_MSG};
+                background-color: {bg};
                 color: {config.COLOR_TEXT};
                 border-radius: 12px;
                 padding: 8px 12px;
@@ -70,6 +83,16 @@ class StreamingLabel(QLabel):
                 selection-background-color: #C8A8E8;
             }}
         """)
+
+    @staticmethod
+    def _lighten_color(hex_color: str, factor: float) -> str:
+        """将颜色变浅"""
+        hex_color = hex_color.lstrip('#')
+        r, g, b = int(hex_color[:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+        r = min(255, int(r * factor))
+        g = min(255, int(g * factor))
+        b = min(255, int(b * factor))
+        return f"#{r:02x}{g:02x}{b:02x}"
         self.setText("")
 
     def append_text(self, text: str):
@@ -106,6 +129,10 @@ class ChatBubble(QWidget):
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
 
+        # 主题色
+        current_persona = persona_manager.get_current()
+        self._theme_color = current_persona.theme_color if current_persona else "#B088C0"
+
         # 最小尺寸 + 可缩放
         self.setMinimumSize(280, 360)
         self.resize(config.CHAT_WIDTH, config.CHAT_HEIGHT)
@@ -133,7 +160,7 @@ class ChatBubble(QWidget):
         self._container.setStyleSheet(f"""
             QWidget {{
                 background-color: {config.COLOR_BUBBLE_BG};
-                border: 1.5px solid {config.COLOR_BUBBLE_BORDER};
+                border: 1.5px solid {self._theme_color};
                 border-radius: 16px;
             }}
         """)
@@ -199,7 +226,7 @@ class ChatBubble(QWidget):
         # 分隔线
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet(f"background-color: {config.COLOR_BUBBLE_BORDER}; max-height: 1px; border: none;")
+        sep.setStyleSheet(f"background-color: {self._theme_color}; max-height: 1px; border: none;")
         layout.addWidget(sep)
 
         # 消息滚动区域
@@ -241,7 +268,7 @@ class ChatBubble(QWidget):
                 font-size: {config.FONT_SIZE_INPUT}px;
                 color: {config.COLOR_TEXT};
             }}
-            QTextEdit:focus {{ border-color: {config.COLOR_SEND_BTN}; }}
+            QTextEdit:focus {{ border-color: {self._theme_color}; }}
         """)
         self._input.installEventFilter(self)
         input_bar.addWidget(self._input, 1)
@@ -252,13 +279,13 @@ class ChatBubble(QWidget):
         self._send_btn.setFont(QFont(config.FONT_FAMILY, config.FONT_SIZE_INPUT, QFont.Bold))
         self._send_btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: {config.COLOR_SEND_BTN};
+                background-color: {self._theme_color};
                 color: white; border: none; border-radius: 12px;
                 font-family: {config.FONT_FAMILY};
                 font-size: {config.FONT_SIZE_INPUT}px;
             }}
-            QPushButton:hover {{ background-color: {config.COLOR_SEND_BTN_HOVER}; }}
-            QPushButton:pressed {{ background-color: #8060A0; }}
+            QPushButton:hover {{ background-color: {self._darken_color(self._theme_color, 0.85)}; }}
+            QPushButton:pressed {{ background-color: {self._darken_color(self._theme_color, 0.7)}; }}
         """)
         self._send_btn.clicked.connect(self._on_send)
         input_bar.addWidget(self._send_btn)
@@ -425,10 +452,13 @@ class ChatBubble(QWidget):
         new_chat_font_size = max(10, int(self._base_font_size * scale))
         new_input_font_size = max(10, int(self._base_input_font_size * scale))
         
+        # 计算主题色背景
+        theme_bg = MessageLabel._lighten_color(self._theme_color, 1.6)
+        
         # 更新消息标签的样式
         msg_style = f"""
             QLabel {{
-                background-color: {config.COLOR_HERMES_MSG};
+                background-color: {theme_bg};
                 color: {config.COLOR_TEXT};
                 border-radius: 12px;
                 padding: 8px 12px;
@@ -532,7 +562,7 @@ class ChatBubble(QWidget):
         w_layout = QHBoxLayout(wrapper)
         w_layout.setContentsMargins(30, 2, 0, 2)
 
-        label = MessageLabel(text, is_user=True)
+        label = MessageLabel(text, is_user=True, theme_color=self._theme_color)
         label.setMaximumWidth(260)
         self._message_labels.append(label)  # 追踪标签
         w_layout.addWidget(label)
@@ -547,20 +577,43 @@ class ChatBubble(QWidget):
         w_layout = QHBoxLayout(wrapper)
         w_layout.setContentsMargins(0, 2, 30, 2)
 
-        avatar = QLabel("🌸")
+        # 头像：使用当前persona的皮肤图片
+        avatar = QLabel()
         avatar.setFixedSize(28, 28)
-        avatar.setAlignment(Qt.AlignCenter)
-        avatar.setStyleSheet("""
-            QLabel {
-                background-color: #F0E6FF;
-                border-radius: 14px;
-                font-size: 14px;
-                border: none;
-            }
-        """)
+        current_persona = persona_manager.get_current()
+        if current_persona and current_persona.skin:
+            from pathlib import Path
+            skin_path = Path(__file__).parent.parent / "assets" / current_persona.skin
+            if skin_path.exists():
+                from PyQt5.QtGui import QPixmap
+                pixmap = QPixmap(str(skin_path)).scaled(28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                avatar.setPixmap(pixmap)
+                avatar.setStyleSheet("background: transparent; border: none;")
+            else:
+                avatar.setText("🌸")
+                avatar.setAlignment(Qt.AlignCenter)
+                avatar.setStyleSheet(f"""
+                    QLabel {{
+                        background-color: {self._theme_color};
+                        border-radius: 14px;
+                        font-size: 14px;
+                        border: none;
+                    }}
+                """)
+        else:
+            avatar.setText("🌸")
+            avatar.setAlignment(Qt.AlignCenter)
+            avatar.setStyleSheet(f"""
+                QLabel {{
+                    background-color: {self._theme_color};
+                    border-radius: 14px;
+                    font-size: 14px;
+                    border: none;
+                }}
+            """)
         w_layout.addWidget(avatar, 0, Qt.AlignTop)
 
-        self._streaming_label = StreamingLabel()
+        self._streaming_label = StreamingLabel(theme_color=self._theme_color)
         self._streaming_label.setMinimumWidth(60)
         self._streaming_label.setMaximumWidth(260)
         w_layout.addWidget(self._streaming_label, 1)
@@ -645,6 +698,52 @@ class ChatBubble(QWidget):
             self.activateWindow()
             self._input.setFocus()
     
+    def update_theme_color(self, color: str):
+        """更新主题色并刷新UI"""
+        self._theme_color = color
+        # 重新应用样式
+        self._container.setStyleSheet(f"""
+            QWidget {{
+                background-color: {config.COLOR_BUBBLE_BG};
+                border: 1.5px solid {color};
+                border-radius: 16px;
+            }}
+        """)
+        # 更新发送按钮
+        self._send_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {color};
+                color: white; border: none; border-radius: 12px;
+                font-family: {config.FONT_FAMILY};
+                font-size: {config.FONT_SIZE_INPUT}px;
+            }}
+            QPushButton:hover {{ background-color: {self._darken_color(color, 0.85)}; }}
+            QPushButton:pressed {{ background-color: {self._darken_color(color, 0.7)}; }}
+        """)
+        # 更新输入框焦点色
+        self._input.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {config.COLOR_INPUT_BG};
+                border: 1.5px solid {config.COLOR_INPUT_BORDER};
+                border-radius: 12px;
+                padding: 6px 12px;
+                font-family: {config.FONT_FAMILY};
+                font-size: {config.FONT_SIZE_INPUT}px;
+                color: {config.COLOR_TEXT};
+            }}
+            QTextEdit:focus {{ border-color: {color}; }}
+        """)
+    
+    @staticmethod
+    def _darken_color(hex_color: str, factor: float) -> str:
+        """将颜色加深（factor < 1）或变浅（factor > 1）"""
+        hex_color = hex_color.lstrip('#')
+        r, g, b = int(hex_color[:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+        r = int(r * factor)
+        g = int(g * factor)
+        b = int(b * factor)
+        return f"#{r:02x}{g:02x}{b:02x}"
+
     def clear_messages(self):
         """清空所有聊天消息（人格切换时调用）"""
         # 遍历并删除所有消息 widget（保留最后的 stretch）

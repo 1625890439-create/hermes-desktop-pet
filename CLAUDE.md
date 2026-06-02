@@ -7,7 +7,7 @@
 
 ## API 接口
 - Endpoint: `http://localhost:8642/v1/chat/completions`
-- Auth: `Bearer hermes-webui-key-2026`（优先从环境变量 `HERMES_API_KEY` 读取）
+- Auth: Bearer token（从环境变量 `HERMES_API_KEY` 读取，为空则不验证）
 - Model: `hermes-agent`
 - 格式：OpenAI Chat Completions 兼容，支持 stream=true
 

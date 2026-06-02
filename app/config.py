@@ -28,8 +28,8 @@ _load_dotenv()
 API_ENDPOINT: str = os.environ.get(
     "HERMES_API_ENDPOINT", "http://localhost:8643/v1/chat/completions"
 )
-# API 密钥（与 Hermes Gateway 配置一致）
-API_KEY: str = os.environ.get("HERMES_DESKTOP_PET_KEY", "desktop-pet-key-2026")
+# API 密钥（与 Hermes Gateway 配置一致，为空则不需要验证）
+API_KEY: str = os.environ.get("HERMES_DESKTOP_PET_KEY", "")
 # 模型名称（对应 Hermes profile 名称）
 MODEL_NAME: str = os.environ.get("HERMES_MODEL_NAME", "desktop-pet")
 

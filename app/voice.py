@@ -146,8 +146,8 @@ class TTSSpeaker(QThread):
         resp = httpx.post(
             f"{self.endpoint}/chat/completions",
             headers={
-                "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
+                **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}),
             },
             json={
                 "model": self.model or "mimo-v2.5-tts",
@@ -177,8 +177,8 @@ class TTSSpeaker(QThread):
         resp = httpx.post(
             self.endpoint,
             headers={
-                "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
+                **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}),
             },
             json={
                 "model": self.model or "tts-1",

@@ -52,10 +52,11 @@ def main():
         # 更新聊天管理器的 system prompt
         chat_mgr.switch_persona()
         
-        # 更新窗口标题
+        # 更新窗口标题和主题色
         current = persona_manager.get_current()
         if current:
             chat.setWindowTitle(f"Hermes - {current.name}")
+            chat.update_theme_color(current.theme_color)
         
         # 清空聊天显示
         chat.clear_messages()
