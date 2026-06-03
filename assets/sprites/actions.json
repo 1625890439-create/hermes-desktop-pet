@@ -1,0 +1,86 @@
+{
+  "idle": {
+    "frame_count": 5,
+    "fps": 4,
+    "frames": [
+      "000.png",
+      "001.png",
+      "002.png",
+      "003.png",
+      "004.png"
+    ]
+  },
+  "walk": {
+    "frame_count": 6,
+    "fps": 8,
+    "frames": [
+      "000.png",
+      "001.png",
+      "002.png",
+      "003.png",
+      "004.png",
+      "005.png"
+    ]
+  },
+  "run": {
+    "frame_count": 5,
+    "fps": 10,
+    "frames": [
+      "000.png",
+      "001.png",
+      "002.png",
+      "003.png",
+      "004.png"
+    ]
+  },
+  "jump": {
+    "frame_count": 5,
+    "fps": 8,
+    "frames": [
+      "000.png",
+      "001.png",
+      "002.png",
+      "003.png",
+      "004.png"
+    ]
+  },
+  "blink": {
+    "frame_count": 6,
+    "fps": 6,
+    "frames": [
+      "000.png",
+      "001.png",
+      "002.png",
+      "003.png",
+      "004.png",
+      "005.png"
+    ]
+  },
+  "talk": {
+    "frame_count": 6,
+    "fps": 6,
+    "frames": [
+      "000.png",
+      "001.png",
+      "002.png",
+      "003.png",
+      "004.png",
+      "005.png"
+    ]
+  },
+  "special": {
+    "frame_count": 9,
+    "fps": 4,
+    "frames": [
+      "000.png",
+      "001.png",
+      "002.png",
+      "003.png",
+      "004.png",
+      "005.png",
+      "006.png",
+      "007.png",
+      "008.png"
+    ]
+  }
+}
