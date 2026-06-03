@@ -62,7 +62,7 @@ class TrayIcon(QSystemTrayIcon):
         current_id = theme_manager.current_id
 
         theme_menu = parent_menu.addMenu("主题")
-        theme_menu.setStyleSheet(self._get_menu_stylesheet())
+        theme_menu.setStyleSheet(self._get_submenu_stylesheet())  # 子菜单也要单独设置主题样式
 
         for theme in theme_manager.get_all():
             action = QAction(f"✨ {theme.name}", self)
@@ -82,44 +82,73 @@ class TrayIcon(QSystemTrayIcon):
         t = theme_manager.get_current()
         if not t:
             return ""
+        if t.glass_effect:
+            bg_color = "rgba(255, 255, 255, 218)"
+            border_color = "rgba(255, 255, 255, 170)"
+            text_color = "#1F2933"
+            hover_bg = "rgba(232, 222, 248, 210)"
+            secondary_color = "#5F6B76"
+            separator_color = "rgba(176, 136, 192, 120)"
+        else:
+            bg_color = t.menu_bg
+            border_color = t.menu_border
+            text_color = t.text_color
+            hover_bg = t.menu_item_hover_bg
+            secondary_color = t.text_secondary
+            separator_color = t.separator_color
         return f"""
             QMenu {{
-                background-color: {t.menu_bg};
-                color: {t.text_color};
-                border: 1px solid {t.menu_border};
+                background-color: {bg_color};
+                color: {text_color};
+                border: 1px solid {border_color};
                 border-radius: {t.menu_border_radius}px;
                 padding: 4px;
                 font-family: 'Microsoft YaHei';
                 font-size: {t.menu_font_size}px;
             }}
             QMenu::item {{
-                padding: {t.menu_item_padding};
+                padding: 8px 38px 8px 18px;
                 border-radius: 4px;
-                color: {t.text_color};
+                color: {text_color};
+                min-width: 112px;
             }}
             QMenu::item:selected {{
-                background-color: {t.menu_item_hover_bg};
-                color: {t.text_color};
+                background-color: {hover_bg};
+                color: {text_color};
             }}
             QMenu::separator {{
                 height: 1px;
-                background: {t.separator_color};
+                background: {separator_color};
                 margin: 4px 8px;
             }}
             QMenu::item:disabled {{
-                color: {t.text_secondary};
+                color: {secondary_color};
+            }}
+            QMenu::item:submenu-indicator {{
+                width: 12px;
+                height: 12px;
+                padding-right: 8px;
             }}
         """
+    
+    @staticmethod
+    def _get_submenu_stylesheet() -> str:
+        """返回子菜单样式表：子菜单必须跟随当前主题。"""
+        # QMenu 的样式不会自动继承到子菜单，因此这里复用主题化菜单样式。
+        return TrayIcon._get_menu_stylesheet()
+
+    def _apply_menu_glass_effects(self, *menus: QMenu) -> None:
+        """为托盘主菜单和子菜单应用 Acrylic，QMenu 不会继承窗口效果。"""
+        t = theme_manager.get_current()
+        if not (t and t.glass_effect and glass_available()):
+            return
+        for menu in menus:
+            apply_acrylic_effect(menu, 0xB8FFFFFF)
 
     def _build_menu(self):
         """构建/重建托盘菜单（响应主题切换时调用）。"""
         self._menu = QMenu()
         self._menu.setStyleSheet(self._get_menu_stylesheet())
-        
-        # 毛玻璃主题应用真正的 Acrylic 效果
-        t = theme_manager.get_current()
-        if t and t.glass_effect and glass_available():
-            apply_acrylic_effect(self._menu, 0x40C0C0C0)
 
         # 显示小赫
         self._show_action = QAction("显示小赫", self)
@@ -135,7 +164,8 @@ class TrayIcon(QSystemTrayIcon):
         self._menu.addSeparator()
 
         # 主题子菜单
-        self._build_theme_menu(self._menu)
+        theme_menu = self._build_theme_menu(self._menu)
+        self._apply_menu_glass_effects(self._menu, theme_menu)
 
         self._menu.addSeparator()
 

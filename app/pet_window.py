@@ -406,18 +406,26 @@ class PetWindow(QWidget):
         if not t:
             return ""
         
-        # 毛玻璃主题使用半透明背景
-        if t.glass_effect and glass_available():
-            bg_color = "rgba(255, 255, 255, 40)"  # 极低不透明度，让 Acrylic 效果显现
-            border_color = "rgba(255, 255, 255, 60)"
+        # 毛玻璃主题：半透明浅色底 + 深色高对比文字，保证背景可见但文字清晰。
+        if t.glass_effect:
+            bg_color = "rgba(255, 255, 255, 218)"
+            border_color = "rgba(255, 255, 255, 170)"
+            text_color = "#1F2933"
+            hover_bg = "rgba(232, 222, 248, 210)"
+            secondary_color = "#5F6B76"
+            separator_color = "rgba(176, 136, 192, 120)"
         else:
             bg_color = t.menu_bg
             border_color = t.menu_border
+            text_color = t.text_color
+            hover_bg = t.menu_item_hover_bg
+            secondary_color = t.text_secondary
+            separator_color = t.separator_color
         
         return f"""
             QMenu {{
                 background-color: {bg_color};
-                color: {t.text_color};
+                color: {text_color};
                 border: 1px solid {border_color};
                 border-radius: {t.menu_border_radius}px;
                 padding: 6px;
@@ -425,38 +433,53 @@ class PetWindow(QWidget):
                 font-size: {t.menu_font_size}px;
             }}
             QMenu::item {{
-                padding: 8px 24px 8px 16px;
+                padding: 8px 38px 8px 18px;
                 border-radius: 6px;
-                color: {t.text_color};
+                color: {text_color};
+                background: transparent;
                 margin: 2px 4px;
+                min-width: 112px;
             }}
             QMenu::item:selected {{
-                background-color: {t.menu_item_hover_bg};
-                color: {t.text_color};
+                background-color: {hover_bg};
+                color: {text_color};
             }}
             QMenu::separator {{
                 height: 1px;
-                background: {t.separator_color};
+                background: {separator_color};
                 margin: 6px 12px;
             }}
             QMenu::item:disabled {{
-                color: {t.text_secondary};
+                color: {secondary_color};
             }}
             QMenu::icon {{
                 padding-left: 8px;
             }}
+            QMenu::item:submenu-indicator {{
+                width: 12px;
+                height: 12px;
+                padding-right: 8px;
+            }}
         """
+    
+    def _get_submenu_stylesheet(self) -> str:
+        """返回子菜单样式表：子菜单必须跟随当前主题。"""
+        # QMenu 的样式不会自动继承到子菜单，因此这里复用主题化菜单样式。
+        return self._get_menu_stylesheet()
+
+    def _apply_menu_glass_effects(self, *menus: QMenu) -> None:
+        """为主菜单和所有子菜单应用 Acrylic，QMenu 不会继承窗口效果。"""
+        t = theme_manager.get_current()
+        if not (t and t.glass_effect and glass_available()):
+            return
+        for menu in menus:
+            # 半透明浅色着色，和对话框毛玻璃接近，同时保留足够文字对比度。
+            apply_acrylic_effect(menu, 0xB8FFFFFF)
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
         stylesheet = self._get_menu_stylesheet()
         menu.setStyleSheet(stylesheet)
-        
-        # 毛玻璃主题应用真正的 Acrylic 效果
-        t = theme_manager.get_current()
-        if t and t.glass_effect and glass_available():
-            # 灰色半透明着色，让背景模糊可见
-            apply_acrylic_effect(menu, 0x40C0C0C0)
 
         toggle_action = QAction("显示/隐藏聊天", self)
         toggle_action.triggered.connect(self._toggle_chat)
@@ -470,7 +493,7 @@ class PetWindow(QWidget):
 
         # 人格切换子菜单
         persona_menu = menu.addMenu("切换人格")
-        persona_menu.setStyleSheet(stylesheet)  # 子菜单也要设置样式
+        persona_menu.setStyleSheet(self._get_submenu_stylesheet())  # 子菜单也要单独设置主题样式
         current_persona = persona_manager.get_current()
 
         for persona in persona_manager.get_all():
@@ -491,7 +514,7 @@ class PetWindow(QWidget):
 
         # 皮肤切换子菜单（保留旧版兼容）
         skin_menu = menu.addMenu("切换皮肤")
-        skin_menu.setStyleSheet(stylesheet)  # 子菜单也要设置样式
+        skin_menu.setStyleSheet(self._get_submenu_stylesheet())  # 子菜单也要单独设置主题样式
         for skin_name in self.SKINS:
             action = QAction(skin_name, self)
             action.setCheckable(True)
@@ -503,7 +526,7 @@ class PetWindow(QWidget):
 
         # 主题切换子菜单
         theme_menu = menu.addMenu("主题")
-        theme_menu.setStyleSheet(stylesheet)  # 子菜单也要设置样式
+        theme_menu.setStyleSheet(self._get_submenu_stylesheet())  # 子菜单也要单独设置主题样式
         current_theme_id = theme_manager.current_id
         for theme in theme_manager.get_all():
             action = QAction(f"✨ {theme.name}", self)
@@ -511,6 +534,8 @@ class PetWindow(QWidget):
             action.setChecked(theme.id == current_theme_id)
             action.triggered.connect(lambda checked, tid=theme.id: self._on_theme_selected(tid))
             theme_menu.addAction(action)
+
+        self._apply_menu_glass_effects(menu, persona_menu, skin_menu, theme_menu)
 
         menu.addSeparator()
 

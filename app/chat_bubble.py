@@ -166,6 +166,12 @@ class ChatBubble(QWidget):
         self._resize_start_geo = None
         self._hover_edge = None  # 悬停的边缘
 
+        # 输入框拖拽调整大小状态
+        self._input_resizing = False
+        self._input_resize_start_y = None
+        self._input_resize_start_height = None
+        self._input_user_resized = False  # 用户是否手动调整过输入框高度
+
         # 记录初始尺寸用于计算缩放比例
         self._base_width = config.CHAT_WIDTH
         self._base_height = config.CHAT_HEIGHT
@@ -175,6 +181,7 @@ class ChatBubble(QWidget):
 
         self._streaming_label: StreamingLabel | None = None
         self._message_labels: list[MessageLabel] = []  # 追踪所有消息标签
+        self._msg_wrappers: list[tuple[QWidget, int, int, int, int]] = []  # (wrapper, l, t, r, b) 追踪消息容器
         self._setup_ui()
         # 应用阴影效果（需要在 _setup_ui 之后，因为 _container 要存在）
         self._apply_shadow_effect()
@@ -291,20 +298,36 @@ class ChatBubble(QWidget):
         self._scroll.setWidget(self._msg_container)
         layout.addWidget(self._scroll, 1)
 
+        # 输入框调整大小手柄
+        self._input_resize_handle = QWidget()
+        self._input_resize_handle.setFixedHeight(6)
+        self._input_resize_handle.setCursor(Qt.SizeVerCursor)
+        self._input_resize_handle.setStyleSheet("""
+            QWidget {
+                background: transparent;
+            }
+            QWidget:hover {
+                background-color: rgba(128, 128, 128, 0.3);
+            }
+        """)
+        self._input_resize_handle.installEventFilter(self)
+        layout.addWidget(self._input_resize_handle)
+
         # 底部输入区域
         input_bar = QHBoxLayout()
         input_bar.setSpacing(6)
 
         self._input = QTextEdit()
         self._input.setPlaceholderText("输入消息...")
-        self._input.setFixedHeight(44)
+        self._input.setMinimumHeight(50)  # 增加最小高度确保文字显示
+        self._input.setMaximumHeight(300)  # 最大高度限制
         self._input.setFont(QFont(config.FONT_FAMILY, config.FONT_SIZE_INPUT))
         self._input.setStyleSheet(f"""
             QTextEdit {{
                 background-color: {t.input_bg};
                 border: 1.5px solid {t.input_border};
                 border-radius: {t.border_radius}px;
-                padding: {t.padding_v - 2}px {t.padding_h}px;
+                padding: 6px {t.padding_h}px;
                 font-family: {config.FONT_FAMILY};
                 font-size: {config.FONT_SIZE_INPUT}px;
                 color: {t.text_color};
@@ -438,6 +461,22 @@ class ChatBubble(QWidget):
             self.setCursor(Qt.ArrowCursor)
             self.update()
 
+    def resizeEvent(self, event):
+        """窗口大小改变时自动更新布局。"""
+        super().resizeEvent(event)
+        # 延迟更新布局，避免在拖拽过程中频繁触发
+        if hasattr(self, '_resize_timer'):
+            self._resize_timer.stop()
+        else:
+            self._resize_timer = QTimer(self)
+            self._resize_timer.setSingleShot(True)
+            self._resize_timer.timeout.connect(self._apply_resize_layout)
+        self._resize_timer.start(50)  # 50ms 延迟
+
+    def _apply_resize_layout(self):
+        """应用缩放后的布局更新。"""
+        self._update_fonts_on_resize(self.width(), self.height())
+
     def _get_resize_edge(self, pos: QPoint) -> str | None:
         """判断鼠标位置是否在窗口边缘。"""
         w, h = self.width(), self.height()
@@ -545,6 +584,15 @@ class ChatBubble(QWidget):
             self._streaming_label.setStyleSheet(msg_style)
             self._streaming_label.setMaximumWidth(max_msg_width)
 
+        # 更新消息容器的边距（跟随缩放）
+        for wrapper_data in self._msg_wrappers:
+            wrapper, base_l, base_t, base_r, base_b = wrapper_data
+            new_l = max(10, int(base_l * scale))
+            new_t = max(1, int(base_t * scale))
+            new_r = max(0, int(base_r * scale))
+            new_b = max(1, int(base_b * scale))
+            wrapper.layout().setContentsMargins(new_l, new_t, new_r, new_b)
+
         # 更新输入框和按钮的字体
         input_style = f"""
             QTextEdit {{
@@ -559,6 +607,15 @@ class ChatBubble(QWidget):
             QTextEdit:focus {{ border-color: {t.input_focus_border}; }}
         """
         self._input.setStyleSheet(input_style)
+
+        # 动态调整输入框最大高度（跟随窗口缩放）
+        new_input_max_height = max(100, int(height * 0.4))
+        self._input.setMaximumHeight(new_input_max_height)
+        
+        # 如果用户没有手动调整过，恢复最小高度为默认值
+        if not self._input_user_resized:
+            self._input.setMinimumHeight(50)
+
         self._send_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {t.send_btn_bg};
@@ -575,6 +632,33 @@ class ChatBubble(QWidget):
 
     def eventFilter(self, obj, event):
         from PyQt5.QtCore import QEvent
+
+        # 处理输入框调整大小手柄的拖拽
+        if obj is self._input_resize_handle:
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                self._input_resizing = True
+                self._input_resize_start_y = event.globalPos().y()
+                self._input_resize_start_height = self._input.height()
+                return True
+            elif event.type() == QEvent.MouseMove and self._input_resizing:
+                from PyQt5.QtWidgets import QApplication
+                dy = event.globalPos().y() - self._input_resize_start_y
+                max_height = self._input.maximumHeight()
+                new_height = max(50, min(max_height, self._input_resize_start_height - dy))
+                # 同时设置最小和最大高度，让布局系统正确响应
+                self._input.setMinimumHeight(new_height)
+                self._input.setMaximumHeight(new_height)
+                # 强制立即处理事件和重绘
+                QApplication.processEvents()
+                return True
+            elif event.type() == QEvent.MouseButtonRelease and self._input_resizing:
+                self._input_resizing = False
+                self._input_user_resized = True  # 标记用户已手动调整
+                self._input_resize_start_y = None
+                self._input_resize_start_height = None
+                return True
+
+        # 处理输入框回车发送
         if obj is self._input and event.type() == QEvent.KeyPress:
             if event.key() in (Qt.Key_Return, Qt.Key_Enter):
                 if not (event.modifiers() & Qt.ShiftModifier):
@@ -644,16 +728,19 @@ class ChatBubble(QWidget):
         wrapper = QWidget()
         wrapper.setStyleSheet("background: transparent; border: none;")
         w_layout = QHBoxLayout(wrapper)
-        w_layout.setContentsMargins(30, 2, 0, 2)
+        base_l, base_t, base_r, base_b = 30, 2, 0, 2
+        w_layout.setContentsMargins(base_l, base_t, base_r, base_b)
 
         label = MessageLabel(text, is_user=True, theme_color=self._theme_color)
         label.setMaximumWidth(self._get_current_max_msg_width())
         self._message_labels.append(label)  # 追踪标签
+        self._msg_wrappers.append((wrapper, base_l, base_t, base_r, base_b))  # 追踪容器
         w_layout.addWidget(label)
         w_layout.addStretch()
 
         self._msg_layout.insertWidget(self._msg_layout.count() - 1, wrapper)
         self._scroll_to_bottom()
+        self._update_fonts_on_resize(self.width(), self.height())
 
     def start_hermes_message(self):
         wrapper = QWidget()
@@ -703,8 +790,12 @@ class ChatBubble(QWidget):
         w_layout.addWidget(self._streaming_label, 1)
         w_layout.addStretch()
 
+        # 追踪容器（用于缩放时更新边距）
+        self._msg_wrappers.append((wrapper, 0, 2, 30, 2))
+
         self._msg_layout.insertWidget(self._msg_layout.count() - 1, wrapper)
         self._scroll_to_bottom()
+        self._update_fonts_on_resize(self.width(), self.height())
         return self._streaming_label
 
     def append_streaming_text(self, text: str):
@@ -906,6 +997,7 @@ class ChatBubble(QWidget):
         # 重置流式标签和追踪列表
         self._streaming_label = None
         self._message_labels.clear()
+        self._msg_wrappers.clear()
         
         # 重新添加欢迎消息
         self._add_welcome_message()
