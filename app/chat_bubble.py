@@ -1,18 +1,27 @@
-"""聊天气泡组件 — 对话界面（支持文字选择 + 窗口缩放）"""
+"""聊天气泡组件 — 对话界面（支持文字选择 + 窗口缩放 + 主题）"""
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize, QPoint
 from PyQt5.QtGui import QFont, QColor, QPainter, QPainterPath, QPen, QBrush, QCursor
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
-    QScrollArea, QLabel, QFrame, QApplication, QSizePolicy
+    QScrollArea, QLabel, QFrame, QApplication, QSizePolicy,
+    QGraphicsDropShadowEffect
 )
 
 from . import config
 from .personas import persona_manager
+from .theme import theme_manager, Theme
+from .glass_effect import apply_acrylic_effect, remove_effects, is_available as glass_available
 
 
 # 缩放方向常量
 _RESIZE_MARGIN = 8  # 边缘拖拽区域宽度
+
+
+def _get_theme() -> Theme:
+    """获取当前主题，若管理器尚未初始化则返回预设 glass 主题。"""
+    t = theme_manager.get_current()
+    return t if t else theme_manager.get("glass") or Theme()
 
 
 class MessageLabel(QLabel):
@@ -36,16 +45,20 @@ class MessageLabel(QLabel):
         self._apply_style()
 
     def _apply_style(self):
-        bg = config.COLOR_USER_MSG if self.is_user else self._lighten_color(self._theme_color, 1.6)
+        theme = _get_theme()
+        if self.is_user:
+            bg = theme.user_msg_bg
+        else:
+            bg = self._lighten_color(self._theme_color, 1.6)
         self.setStyleSheet(f"""
             QLabel {{
                 background-color: {bg};
-                color: {config.COLOR_TEXT};
-                border-radius: 12px;
-                padding: 8px 12px;
+                color: {theme.text_color};
+                border-radius: {theme.border_radius}px;
+                padding: {theme.padding_v}px {theme.padding_h}px;
                 font-family: {config.FONT_FAMILY};
                 font-size: {config.FONT_SIZE_CHAT}px;
-                selection-background-color: #C8A8E8;
+                selection-background-color: {theme.selection_bg};
             }}
         """)
 
@@ -71,16 +84,17 @@ class StreamingLabel(QLabel):
         self.setWordWrap(True)
         font = QFont(config.FONT_FAMILY, config.FONT_SIZE_CHAT)
         self.setFont(font)
+        theme = _get_theme()
         bg = self._lighten_color(theme_color, 1.6)
         self.setStyleSheet(f"""
             QLabel {{
                 background-color: {bg};
-                color: {config.COLOR_TEXT};
-                border-radius: 12px;
-                padding: 8px 12px;
+                color: {theme.text_color};
+                border-radius: {theme.border_radius}px;
+                padding: {theme.padding_v}px {theme.padding_h}px;
                 font-family: {config.FONT_FAMILY};
                 font-size: {config.FONT_SIZE_CHAT}px;
-                selection-background-color: #C8A8E8;
+                selection-background-color: {theme.selection_bg};
             }}
         """)
 
@@ -133,6 +147,14 @@ class ChatBubble(QWidget):
         current_persona = persona_manager.get_current()
         self._theme_color = current_persona.theme_color if current_persona else "#B088C0"
 
+        # 当前主题引用
+        self._current_theme = _get_theme()
+        # 阴影效果对象（动态创建/销毁）
+        self._shadow_effect: QGraphicsDropShadowEffect | None = None
+
+        # 应用毛玻璃效果
+        self._apply_glass_effect()
+
         # 最小尺寸 + 可缩放
         self.setMinimumSize(280, 360)
         self.resize(config.CHAT_WIDTH, config.CHAT_HEIGHT)
@@ -149,19 +171,24 @@ class ChatBubble(QWidget):
         self._base_height = config.CHAT_HEIGHT
         self._base_font_size = config.FONT_SIZE_CHAT
         self._base_input_font_size = config.FONT_SIZE_INPUT
+        self._base_max_msg_width = 260  # 消息气泡最大宽度基准
 
         self._streaming_label: StreamingLabel | None = None
         self._message_labels: list[MessageLabel] = []  # 追踪所有消息标签
         self._setup_ui()
+        # 应用阴影效果（需要在 _setup_ui 之后，因为 _container 要存在）
+        self._apply_shadow_effect()
 
     def _setup_ui(self):
+        t = self._current_theme
+
         # 外层容器 — 用布局填充整个窗口，跟随缩放
         self._container = QWidget(self)
         self._container.setStyleSheet(f"""
             QWidget {{
-                background-color: {config.COLOR_BUBBLE_BG};
-                border: 1.5px solid {self._theme_color};
-                border-radius: 16px;
+                background-color: {t.bubble_bg};
+                border: 1.5px solid {t.bubble_border};
+                border-radius: {t.bubble_border_radius}px;
             }}
         """)
 
@@ -170,8 +197,8 @@ class ChatBubble(QWidget):
         root_layout.addWidget(self._container)
 
         layout = QVBoxLayout(self._container)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(6)
+        layout.setContentsMargins(t.padding_h, 10, t.padding_h, 10)
+        layout.setSpacing(t.spacing)
 
         # 标题栏（可拖拽移动窗口）
         self._title_bar = QWidget()
@@ -182,7 +209,9 @@ class ChatBubble(QWidget):
 
         title_label = QLabel("💬 Hermes 助手")
         title_label.setFont(QFont(config.FONT_FAMILY, 13, QFont.Bold))
-        title_label.setStyleSheet(f"color: {config.COLOR_TEXT}; border: none; background: transparent;")
+        title_label.setStyleSheet(
+            f"color: {t.title_color}; border: none; background: transparent;"
+        )
         title_layout.addWidget(title_label)
         title_layout.addStretch()
 
@@ -191,12 +220,14 @@ class ChatBubble(QWidget):
         restart_btn.setFixedSize(28, 28)
         restart_btn.setCursor(Qt.PointingHandCursor)
         restart_btn.setToolTip("重启应用")
-        restart_btn.setStyleSheet("""
-            QPushButton {
+        restart_btn.setStyleSheet(f"""
+            QPushButton {{
                 background: transparent; border: none;
-                font-size: 14px; color: #999; border-radius: 14px;
-            }
-            QPushButton:hover { background-color: #E8DEF8; color: #666; }
+                font-size: 14px; color: {t.titlebar_btn_color}; border-radius: 14px;
+            }}
+            QPushButton:hover {{
+                background-color: {t.titlebar_btn_hover_bg}; color: {t.titlebar_btn_hover_text};
+            }}
         """)
         restart_btn.clicked.connect(self._on_restart)
         title_layout.addWidget(restart_btn)
@@ -204,12 +235,14 @@ class ChatBubble(QWidget):
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(28, 28)
         close_btn.setCursor(Qt.PointingHandCursor)
-        close_btn.setStyleSheet("""
-            QPushButton {
+        close_btn.setStyleSheet(f"""
+            QPushButton {{
                 background: transparent; border: none;
-                font-size: 16px; color: #999; border-radius: 14px;
-            }
-            QPushButton:hover { background-color: #FF6B6B; color: white; }
+                font-size: 16px; color: {t.titlebar_btn_color}; border-radius: 14px;
+            }}
+            QPushButton:hover {{
+                background-color: {t.close_btn_hover_bg}; color: {t.close_btn_hover_text};
+            }}
         """)
         close_btn.clicked.connect(self.hide)
         title_layout.addWidget(close_btn)
@@ -219,25 +252,33 @@ class ChatBubble(QWidget):
         self._context_label = QLabel("")
         self._context_label.setFont(QFont(config.FONT_FAMILY, 10))
         self._context_label.setStyleSheet(
-            f"color: {config.COLOR_TEXT_SECONDARY}; border: none; background: transparent; padding: 0 4px;"
+            f"color: {t.text_secondary}; border: none; background: transparent; padding: 0 4px;"
         )
         layout.addWidget(self._context_label)
 
         # 分隔线
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet(f"background-color: {self._theme_color}; max-height: 1px; border: none;")
+        sep.setStyleSheet(
+            f"background-color: {t.separator_color}; max-height: 1px; border: none;"
+        )
         layout.addWidget(sep)
 
         # 消息滚动区域
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._scroll.setStyleSheet("""
-            QScrollArea { border: none; background: transparent; }
-            QScrollBar:vertical { width: 6px; background: transparent; }
-            QScrollBar::handle:vertical { background: #C0B0D0; border-radius: 3px; min-height: 20px; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+        self._scroll.setStyleSheet(f"""
+            QScrollArea {{ border: none; background: transparent; }}
+            QScrollBar:vertical {{
+                width: {t.scrollbar_width}px; background: transparent;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {t.scrollbar_handle};
+                border-radius: {t.scrollbar_handle_radius}px;
+                min-height: 20px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
         """)
 
         self._msg_container = QWidget()
@@ -260,15 +301,15 @@ class ChatBubble(QWidget):
         self._input.setFont(QFont(config.FONT_FAMILY, config.FONT_SIZE_INPUT))
         self._input.setStyleSheet(f"""
             QTextEdit {{
-                background-color: {config.COLOR_INPUT_BG};
-                border: 1.5px solid {config.COLOR_INPUT_BORDER};
-                border-radius: 12px;
-                padding: 6px 12px;
+                background-color: {t.input_bg};
+                border: 1.5px solid {t.input_border};
+                border-radius: {t.border_radius}px;
+                padding: {t.padding_v - 2}px {t.padding_h}px;
                 font-family: {config.FONT_FAMILY};
                 font-size: {config.FONT_SIZE_INPUT}px;
-                color: {config.COLOR_TEXT};
+                color: {t.text_color};
             }}
-            QTextEdit:focus {{ border-color: {self._theme_color}; }}
+            QTextEdit:focus {{ border-color: {t.input_focus_border}; }}
         """)
         self._input.installEventFilter(self)
         input_bar.addWidget(self._input, 1)
@@ -279,13 +320,14 @@ class ChatBubble(QWidget):
         self._send_btn.setFont(QFont(config.FONT_FAMILY, config.FONT_SIZE_INPUT, QFont.Bold))
         self._send_btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: {self._theme_color};
-                color: white; border: none; border-radius: 12px;
+                background-color: {t.send_btn_bg};
+                color: {t.send_btn_text}; border: none;
+                border-radius: {t.border_radius}px;
                 font-family: {config.FONT_FAMILY};
                 font-size: {config.FONT_SIZE_INPUT}px;
             }}
-            QPushButton:hover {{ background-color: {self._darken_color(self._theme_color, 0.85)}; }}
-            QPushButton:pressed {{ background-color: {self._darken_color(self._theme_color, 0.7)}; }}
+            QPushButton:hover {{ background-color: {t.send_btn_hover}; }}
+            QPushButton:pressed {{ background-color: {t.send_btn_pressed}; }}
         """)
         self._send_btn.clicked.connect(self._on_send)
         input_bar.addWidget(self._send_btn)
@@ -295,15 +337,15 @@ class ChatBubble(QWidget):
         self._mic_btn.setFixedSize(44, 44)
         self._mic_btn.setCursor(Qt.PointingHandCursor)
         self._mic_btn.setToolTip("语音输入（点击后说话）")
-        self._mic_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #F0E6FF;
-                border: 1.5px solid #D0C0E0;
-                border-radius: 12px;
+        self._mic_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t.mic_btn_bg};
+                border: 1.5px solid {t.mic_btn_border};
+                border-radius: {t.border_radius}px;
                 font-size: 18px;
-            }
-            QPushButton:hover { background-color: #E0D0F5; }
-            QPushButton:pressed { background-color: #D0C0E8; }
+            }}
+            QPushButton:hover {{ background-color: {t.mic_btn_hover}; }}
+            QPushButton:pressed {{ background-color: {t.mic_btn_pressed}; }}
         """)
         self._mic_btn.clicked.connect(self._on_mic)
         input_bar.addWidget(self._mic_btn)
@@ -315,15 +357,18 @@ class ChatBubble(QWidget):
         self._voice_btn.setToolTip("语音播报开关")
         self._voice_btn.setCheckable(True)
         self._voice_btn.setChecked(True)
-        self._voice_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #E8F5E9;
-                border: 1.5px solid #C8E6C9;
-                border-radius: 12px;
+        self._voice_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t.voice_btn_bg};
+                border: 1.5px solid {t.voice_btn_border};
+                border-radius: {t.border_radius}px;
                 font-size: 18px;
-            }
-            QPushButton:checked { background-color: #C8E6C9; border-color: #A5D6A7; }
-            QPushButton:hover { background-color: #DCEDC8; }
+            }}
+            QPushButton:checked {{
+                background-color: {t.voice_btn_checked_bg};
+                border-color: {t.voice_btn_checked_border};
+            }}
+            QPushButton:hover {{ background-color: {t.voice_btn_hover}; }}
         """)
         self._voice_btn.clicked.connect(self._on_voice_toggle)
         input_bar.addWidget(self._voice_btn)
@@ -443,55 +488,88 @@ class ChatBubble(QWidget):
         self._update_fonts_on_resize(w, h)
 
     def _update_fonts_on_resize(self, width: int, height: int):
-        """根据窗口大小动态调整字体。"""
-        # 计算缩放比例（基于宽度）
+        """根据窗口大小动态调整字体和气泡尺寸。"""
         scale = width / self._base_width
-        scale = max(0.6, min(scale, 2.0))  # 限制缩放范围
-        
+        scale = max(0.6, min(scale, 4.0))  # 限制缩放范围
+
+        t = self._current_theme
+
         # 计算新字体大小
         new_chat_font_size = max(10, int(self._base_font_size * scale))
         new_input_font_size = max(10, int(self._base_input_font_size * scale))
-        
+
+        # 计算气泡内边距和圆角（跟随缩放）
+        pv = max(4, int(t.padding_v * scale))
+        ph = max(6, int(t.padding_h * scale))
+        br = max(6, int(t.border_radius * scale))
+
+        # 计算消息气泡最大宽度（跟随缩放）
+        max_msg_width = max(150, int(self._base_max_msg_width * scale))
+
         # 计算主题色背景
         theme_bg = MessageLabel._lighten_color(self._theme_color, 1.6)
-        
+
         # 更新消息标签的样式
         msg_style = f"""
             QLabel {{
                 background-color: {theme_bg};
-                color: {config.COLOR_TEXT};
-                border-radius: 12px;
-                padding: 8px 12px;
+                color: {t.text_color};
+                border-radius: {br}px;
+                padding: {pv}px {ph}px;
                 font-family: {config.FONT_FAMILY};
                 font-size: {new_chat_font_size}px;
-                selection-background-color: #C8A8E8;
+                selection-background-color: {t.selection_bg};
             }}
         """
         user_style = f"""
             QLabel {{
-                background-color: {config.COLOR_USER_MSG};
-                color: {config.COLOR_TEXT};
-                border-radius: 12px;
-                padding: 8px 12px;
+                background-color: {t.user_msg_bg};
+                color: {t.text_color};
+                border-radius: {br}px;
+                padding: {pv}px {ph}px;
                 font-family: {config.FONT_FAMILY};
                 font-size: {new_chat_font_size}px;
-                selection-background-color: #C8A8E8;
+                selection-background-color: {t.selection_bg};
             }}
         """
-        
+
         for label in self._message_labels:
             if hasattr(label, 'is_user') and label.is_user:
                 label.setStyleSheet(user_style)
             else:
                 label.setStyleSheet(msg_style)
-        
+            label.setMaximumWidth(max_msg_width)
+
         # 更新流式标签的样式
         if self._streaming_label:
             self._streaming_label.setStyleSheet(msg_style)
-        
+            self._streaming_label.setMaximumWidth(max_msg_width)
+
         # 更新输入框和按钮的字体
-        self._input.setFont(QFont(config.FONT_FAMILY, new_input_font_size))
-        self._send_btn.setFont(QFont(config.FONT_FAMILY, new_input_font_size, QFont.Bold))
+        input_style = f"""
+            QTextEdit {{
+                background-color: {t.input_bg};
+                border: 1.5px solid {t.input_border};
+                border-radius: {br}px;
+                padding: {pv}px {ph}px;
+                font-family: {config.FONT_FAMILY};
+                font-size: {new_input_font_size}px;
+                color: {t.text_color};
+            }}
+            QTextEdit:focus {{ border-color: {t.input_focus_border}; }}
+        """
+        self._input.setStyleSheet(input_style)
+        self._send_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t.send_btn_bg};
+                color: {t.send_btn_text}; border: none;
+                border-radius: {br}px;
+                font-family: {config.FONT_FAMILY};
+                font-size: {new_input_font_size}px;
+            }}
+            QPushButton:hover {{ background-color: {t.send_btn_hover}; }}
+            QPushButton:pressed {{ background-color: {t.send_btn_pressed}; }}
+        """)
 
     # ── 其他逻辑 ──
 
@@ -556,6 +634,12 @@ class ChatBubble(QWidget):
             self._scroll.verticalScrollBar().maximum()
         ))
 
+    def _get_current_max_msg_width(self) -> int:
+        """获取当前缩放比例下的消息气泡最大宽度"""
+        scale = self.width() / self._base_width
+        scale = max(0.6, min(scale, 4.0))
+        return max(150, int(self._base_max_msg_width * scale))
+
     def add_user_message(self, text: str):
         wrapper = QWidget()
         wrapper.setStyleSheet("background: transparent; border: none;")
@@ -563,7 +647,7 @@ class ChatBubble(QWidget):
         w_layout.setContentsMargins(30, 2, 0, 2)
 
         label = MessageLabel(text, is_user=True, theme_color=self._theme_color)
-        label.setMaximumWidth(260)
+        label.setMaximumWidth(self._get_current_max_msg_width())
         self._message_labels.append(label)  # 追踪标签
         w_layout.addWidget(label)
         w_layout.addStretch()
@@ -615,7 +699,7 @@ class ChatBubble(QWidget):
 
         self._streaming_label = StreamingLabel(theme_color=self._theme_color)
         self._streaming_label.setMinimumWidth(60)
-        self._streaming_label.setMaximumWidth(260)
+        self._streaming_label.setMaximumWidth(self._get_current_max_msg_width())
         w_layout.addWidget(self._streaming_label, 1)
         w_layout.addStretch()
 
@@ -643,18 +727,19 @@ class ChatBubble(QWidget):
         w_layout = QHBoxLayout(wrapper)
         w_layout.setContentsMargins(0, 2, 30, 2)
 
+        t = self._current_theme
         label = QLabel(f"⚠️ {text}")
         label.setWordWrap(True)
         label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         label.setFont(QFont(config.FONT_FAMILY, config.FONT_SIZE_LABEL))
-        label.setStyleSheet("""
-            QLabel {
-                background-color: #FFF0F0;
-                color: #CC4444;
-                border: 1px solid #FFD0D0;
-                border-radius: 10px;
-                padding: 8px 12px;
-            }
+        label.setStyleSheet(f"""
+            QLabel {{
+                background-color: {t.error_bg};
+                color: {t.error_text};
+                border: 1px solid {t.error_border};
+                border-radius: {t.border_radius - 2}px;
+                padding: {t.padding_v}px {t.padding_h}px;
+            }}
         """)
         label.setMaximumWidth(280)
         w_layout.addWidget(label)
@@ -675,7 +760,9 @@ class ChatBubble(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         m = _RESIZE_MARGIN
         w, h = self.width(), self.height()
-        color = QColor(176, 136, 192, 120)
+        # 使用主题色作为边缘高亮参考色
+        rgba = self._parse_rgba(self._current_theme.input_focus_border)
+        color = QColor(rgba[0], rgba[1], rgba[2], 120)
         p.setPen(Qt.NoPen)
         p.setBrush(QBrush(color))
         edge = self._hover_edge
@@ -699,40 +786,103 @@ class ChatBubble(QWidget):
             self._input.setFocus()
     
     def update_theme_color(self, color: str):
-        """更新主题色并刷新UI"""
+        """更新主题色并刷新UI（由人格切换触发）"""
         self._theme_color = color
-        # 重新应用样式
+        self._refresh_all_styles()
+
+    # ── 主题切换 ──
+
+    def update_theme(self, theme_id: str | None = None):
+        """响应全局主题切换，刷新所有样式。
+
+        Args:
+            theme_id: 新主题 ID，若为 None 则从 theme_manager 获取当前主题。
+        """
+        self._current_theme = _get_theme()
+        self._refresh_all_styles()
+
+        # 更新毛玻璃效果
+        self._apply_glass_effect()
+
+        # 更新阴影效果
+        self._apply_shadow_effect()
+
+        logger = __import__('logging').getLogger(__name__)
+        logger.debug(f"ChatBubble 主题已更新: {self._current_theme.name}")
+
+    def _refresh_all_styles(self):
+        """重新计算并应用所有组件的样式（基于当前主题 + 主题色）。"""
+        t = self._current_theme
+
+        # 容器样式
         self._container.setStyleSheet(f"""
             QWidget {{
-                background-color: {config.COLOR_BUBBLE_BG};
-                border: 1.5px solid {color};
-                border-radius: 16px;
+                background-color: {t.bubble_bg};
+                border: 1.5px solid {t.bubble_border};
+                border-radius: {t.bubble_border_radius}px;
             }}
         """)
-        # 更新发送按钮
-        self._send_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {color};
-                color: white; border: none; border-radius: 12px;
-                font-family: {config.FONT_FAMILY};
-                font-size: {config.FONT_SIZE_INPUT}px;
-            }}
-            QPushButton:hover {{ background-color: {self._darken_color(color, 0.85)}; }}
-            QPushButton:pressed {{ background-color: {self._darken_color(color, 0.7)}; }}
-        """)
-        # 更新输入框焦点色
-        self._input.setStyleSheet(f"""
-            QTextEdit {{
-                background-color: {config.COLOR_INPUT_BG};
-                border: 1.5px solid {config.COLOR_INPUT_BORDER};
-                border-radius: 12px;
-                padding: 6px 12px;
-                font-family: {config.FONT_FAMILY};
-                font-size: {config.FONT_SIZE_INPUT}px;
-                color: {config.COLOR_TEXT};
-            }}
-            QTextEdit:focus {{ border-color: {color}; }}
-        """)
+
+        # 点击 resize 刷新气泡样式
+        if hasattr(self, '_rescaling') and self._rescaling:
+            return
+        self._update_fonts_on_resize(self.width(), self.height())
+
+    def _apply_glass_effect(self):
+        """应用毛玻璃半透明效果。"""
+        t = self._current_theme
+        if t.glass_effect:
+            self.setWindowOpacity(t.background_opacity)
+            # 应用真正的 Windows Acrylic 模糊效果
+            if glass_available():
+                apply_acrylic_effect(self, 0x20FFFFFF)  # 浅色半透明着色
+        else:
+            self.setWindowOpacity(1.0)
+            if glass_available():
+                remove_effects(self)
+
+    def _apply_shadow_effect(self):
+        """应用/移除窗口阴影效果。"""
+        t = self._current_theme
+
+        # 移除旧阴影
+        if self._shadow_effect:
+            try:
+                self._shadow_effect.setEnabled(False)
+                self._container.setGraphicsEffect(None)
+                self._shadow_effect.deleteLater()
+            except RuntimeError:
+                pass  # C++ 对象已被删除
+            self._shadow_effect = None
+
+        if t.shadow_enabled:
+            self._shadow_effect = QGraphicsDropShadowEffect(self)
+            self._shadow_effect.setBlurRadius(t.shadow_blur)
+            self._shadow_effect.setOffset(t.shadow_offset_x, t.shadow_offset_y)
+            self._shadow_effect.setColor(QColor(
+                *self._parse_rgba(t.shadow_color)
+            ))
+            self._container.setGraphicsEffect(self._shadow_effect)
+
+    @staticmethod
+    def _parse_rgba(rgba_str: str) -> tuple:
+        """解析 'rgba(r, g, b, a)' 或 '#RRGGBB' 字符串为 (r, g, b, a) 元组。"""
+        s = rgba_str.strip()
+        if s.startswith("rgba("):
+            s = s[5:-1]
+            parts = [int(x.strip()) for x in s.split(",")]
+            return tuple(parts[:4])
+        elif s.startswith("rgb("):
+            s = s[4:-1]
+            parts = [int(x.strip()) for x in s.split(",")]
+            return (*parts[:3], 255)
+        elif s.startswith("#"):
+            s = s.lstrip('#')
+            if len(s) == 6:
+                return int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16), 255
+            elif len(s) == 8:
+                return int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16), int(s[6:8], 16)
+        return (0, 0, 0, 255)
     
     @staticmethod
     def _darken_color(hex_color: str, factor: float) -> str:

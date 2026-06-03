@@ -15,12 +15,11 @@
         "主人好呀～(◕ᴗ◕✿)",
         "嘿嘿，主人来了！✧(≖ ◡ ≖✿)",
         "想小赫了吗～♪(´ε` )",
-        "主人今天也要加油哦！(ง •̀_•́)ง",
-        "小赫一直在等你呢 (´;ω;`)",
-        "诶嘿～有什么需要帮忙的吗？"
+        "主人今天也要加油哦！(ง •̀_•́)ง"
       ],
-      "tts_provider": "edge-tts",
-      "tts_voice": "zh-CN-XiaoxiaoNeural",
+      "tts_provider": "",
+      "tts_model": "",
+      "tts_voice": "",
       "tts_api_key": "",
       "tts_endpoint": ""
     },
@@ -41,7 +40,27 @@
         "有时候说出来，心里会舒服很多。"
       ],
       "tts_provider": "edge-tts",
+      "tts_model": "",
       "tts_voice": "zh-CN-YunxiNeural",
+      "tts_api_key": "",
+      "tts_endpoint": ""
+    },
+    {
+      "id": "win",
+      "name": "win大师",
+      "api_endpoint": "http://localhost:8645/v1/chat/completions",
+      "api_key": "win-expert-key-2026",
+      "model_name": "win-expert",
+      "skin": "hamster.png",
+      "system_prompt": "说话简单且有切中要害",
+      "theme_color": "#aaff00",
+      "description": "windows大师！",
+      "greetings": [
+        "你好，我是win大师，有什么可以帮你的？"
+      ],
+      "tts_provider": "",
+      "tts_model": "",
+      "tts_voice": "",
       "tts_api_key": "",
       "tts_endpoint": ""
     }

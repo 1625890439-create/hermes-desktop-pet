@@ -100,3 +100,11 @@ XIAOMI_STT_MODEL: str = "whisper-1"
 
 # OpenAI 语音 API
 OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
+
+# === 主题配置 ===
+# 默认主题 ID，首次启动时使用，后续由 themes.json 覆盖
+DEFAULT_THEME: str = os.environ.get("DEFAULT_THEME", "glass")
+# 主题过渡动画时长（毫秒），0 表示禁用在过渡
+THEME_TRANSITION_DURATION: int = int(os.environ.get("THEME_TRANSITION_DURATION", "0"))
+# 可用主题 ID 列表（逗号分隔）
+THEME_IDS: list[str] = os.environ.get("THEME_IDS", "glass,cyber,cute,minimal").split(",")

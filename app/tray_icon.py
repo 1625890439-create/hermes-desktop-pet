@@ -4,9 +4,16 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPen, QBrush
 from PyQt5.QtWidgets import QSystemTrayIcon, QMenu, QAction, QApplication
 
+from .theme import theme_manager
+from .glass_effect import apply_acrylic_effect, is_available as glass_available
+
 
 def _create_tray_icon_pixmap() -> QPixmap:
-    """生成一个简单的托盘图标（16x16 紫色圆形 + H 字母）。"""
+    """生成一个简单的托盘图标（32x32 圆形 + H 字母），颜色跟随当前主题。"""
+    t = theme_manager.get_current()
+    bg_color = t.tray_icon_bg if t else "#B088C0"
+    text_color = t.tray_icon_text_color if t else "#FFFFFF"
+
     size = 32
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.transparent)
@@ -15,10 +22,10 @@ def _create_tray_icon_pixmap() -> QPixmap:
     painter.setRenderHint(QPainter.Antialiasing)
 
     painter.setPen(Qt.NoPen)
-    painter.setBrush(QBrush(QColor("#B088C0")))
+    painter.setBrush(QBrush(QColor(bg_color)))
     painter.drawEllipse(2, 2, size - 4, size - 4)
 
-    painter.setPen(QPen(QColor("#FFFFFF"), 2))
+    painter.setPen(QPen(QColor(text_color), 2))
     font = QFont("Arial", 16, QFont.Bold)
     painter.setFont(font)
     painter.drawText(pixmap.rect(), Qt.AlignCenter, "H")
@@ -32,32 +39,87 @@ class TrayIcon(QSystemTrayIcon):
 
     show_pet_clicked = pyqtSignal()   # 显示小赫
     restart_clicked = pyqtSignal()    # 重启应用
+    theme_changed = pyqtSignal(str)   # 主题切换（转发到 main.py）
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        pixmap = _create_tray_icon_pixmap()
-        self.setIcon(QIcon(pixmap))
         self.setToolTip("Hermes Desktop Pet")
 
-        self._menu = QMenu()
-        self._menu.setStyleSheet("""
-            QMenu {
-                background-color: #FFF;
-                border: 1px solid #D0C0E0;
-                border-radius: 6px;
+        self._show_action: QAction | None = None
+        self._toggle_action: QAction | None = None
+        self._restart_action: QAction | None = None
+        self._quit_action: QAction | None = None
+        self._theme_menu: QMenu | None = None
+        self._toggle_callbacks: list = []  # 保存 toggle 回调列表
+
+        self._build_menu()
+        self.activated.connect(self._on_activated)
+
+    def _build_theme_menu(self, parent_menu: QMenu) -> QMenu:
+        """构建主题子菜单。"""
+        t = theme_manager.get_current()
+        current_id = theme_manager.current_id
+
+        theme_menu = parent_menu.addMenu("主题")
+        theme_menu.setStyleSheet(self._get_menu_stylesheet())
+
+        for theme in theme_manager.get_all():
+            action = QAction(f"✨ {theme.name}", self)
+            action.setCheckable(True)
+            action.setChecked(theme.id == current_id)
+            action.triggered.connect(
+                lambda checked, tid=theme.id: self._on_theme_selected(tid)
+            )
+            theme_menu.addAction(action)
+
+        self._theme_menu = theme_menu
+        return theme_menu
+
+    @staticmethod
+    def _get_menu_stylesheet() -> str:
+        """返回基于当前主题的菜单样式表。"""
+        t = theme_manager.get_current()
+        if not t:
+            return ""
+        return f"""
+            QMenu {{
+                background-color: {t.menu_bg};
+                color: {t.text_color};
+                border: 1px solid {t.menu_border};
+                border-radius: {t.menu_border_radius}px;
                 padding: 4px;
                 font-family: 'Microsoft YaHei';
-                font-size: 12px;
-            }
-            QMenu::item {
-                padding: 6px 20px;
+                font-size: {t.menu_font_size}px;
+            }}
+            QMenu::item {{
+                padding: {t.menu_item_padding};
                 border-radius: 4px;
-            }
-            QMenu::item:selected {
-                background-color: #E8DEF8;
-            }
-        """)
+                color: {t.text_color};
+            }}
+            QMenu::item:selected {{
+                background-color: {t.menu_item_hover_bg};
+                color: {t.text_color};
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background: {t.separator_color};
+                margin: 4px 8px;
+            }}
+            QMenu::item:disabled {{
+                color: {t.text_secondary};
+            }}
+        """
+
+    def _build_menu(self):
+        """构建/重建托盘菜单（响应主题切换时调用）。"""
+        self._menu = QMenu()
+        self._menu.setStyleSheet(self._get_menu_stylesheet())
+        
+        # 毛玻璃主题应用真正的 Acrylic 效果
+        t = theme_manager.get_current()
+        if t and t.glass_effect and glass_available():
+            apply_acrylic_effect(self._menu, 0x40C0C0C0)
 
         # 显示小赫
         self._show_action = QAction("显示小赫", self)
@@ -72,6 +134,11 @@ class TrayIcon(QSystemTrayIcon):
 
         self._menu.addSeparator()
 
+        # 主题子菜单
+        self._build_theme_menu(self._menu)
+
+        self._menu.addSeparator()
+
         # 重启
         self._restart_action = QAction("重启", self)
         self._restart_action.triggered.connect(self.restart_clicked.emit)
@@ -82,13 +149,39 @@ class TrayIcon(QSystemTrayIcon):
         self._quit_action.triggered.connect(QApplication.quit)
         self._menu.addAction(self._quit_action)
 
+        # 重新连接保存的 toggle 回调
+        for cb in self._toggle_callbacks:
+            if self._toggle_action:
+                self._toggle_action.triggered.connect(cb)
+
         self.setContextMenu(self._menu)
 
-        self.activated.connect(self._on_activated)
+        # 更新图标
+        self.update_icon()
+
+    def update_icon(self):
+        """更新托盘图标以匹配当前主题。"""
+        pixmap = _create_tray_icon_pixmap()
+        self.setIcon(QIcon(pixmap))
+
+    def update_theme(self, theme_id: str | None = None):
+        """响应主题切换，重建菜单和图标。"""
+        # 重建菜单（需要断开旧的点击连接，最简单是重建）
+        self._build_menu()
+        # 更新图标颜色
+        self.update_icon()
+
+    def _on_theme_selected(self, theme_id: str):
+        """托盘选择主题后的回调。"""
+        if theme_manager.switch_theme(theme_id):
+            self.theme_changed.emit(theme_id)
 
     def _on_activated(self, reason):
         if reason == QSystemTrayIcon.DoubleClick:
             self.show_pet_clicked.emit()
 
     def connect_toggle(self, callback):
-        self._toggle_action.triggered.connect(callback)
+        """连接切换聊天窗口回调（支持多次调用，重建菜单时自动重连）。"""
+        self._toggle_callbacks.append(callback)
+        if self._toggle_action:
+            self._toggle_action.triggered.connect(callback)

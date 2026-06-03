@@ -14,6 +14,7 @@ from app.tray_icon import TrayIcon
 from app.api_client import ChatManager
 from app.voice import TTSSpeaker, STTListener
 from app.personas import persona_manager
+from app.theme import theme_manager
 
 # 日志配置
 logging.basicConfig(
@@ -64,6 +65,31 @@ def main():
         logger.info(f"人格切换完成: {current.name if current else '未知'}")
     
     pet.persona_changed.connect(on_persona_changed)
+
+    # ── 主题切换处理 ──
+
+    def on_theme_changed(theme_id: str):
+        """全局主题切换回调 — 更新所有 UI 组件。"""
+        logger.info(f"主题切换: {theme_id}")
+        theme = theme_manager.get_current()
+        if theme:
+            logger.info(f"  → {theme.name}")
+
+        # 更新聊天气泡窗口
+        chat.update_theme(theme_id)
+
+        # 更新托盘菜单和图标
+        tray.update_theme(theme_id)
+
+        # 宠物窗口重绘（菜单样式跟随主题）
+        pet.update()
+
+    theme_manager.theme_changed.connect(on_theme_changed)
+    # 也连接来自托盘的主题变更信号
+    tray.theme_changed.connect(lambda tid: theme_manager.switch_theme(tid))
+
+    # 应用启动时的初始主题
+    on_theme_changed(theme_manager.current_id)
 
     # ── 位置追踪：聊天窗口跟随宠物移动 ──
 

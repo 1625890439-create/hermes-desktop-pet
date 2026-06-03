@@ -4,6 +4,8 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QColor, QPainter, QPainterPath, QPen, QBrush, QFontMetrics
 from PyQt5.QtWidgets import QWidget
 
+from .theme import theme_manager
+
 
 class GreetingBubble(QWidget):
     """独立的问候气泡窗口，浮动在宠物上方。"""
@@ -97,35 +99,43 @@ class GreetingBubble(QWidget):
         """绘制气泡。"""
         if not self._text:
             return
-        
+
+        t = theme_manager.get_current()
+        border_color = t.bubble_border if t else "#E0D0F0"
+        bg_color = t.bubble_bg if t else "rgba(255, 255, 255, 240)"
+        text_color = t.text_color if t else "#2D2D2D"
+        radius = t.border_radius if t else 10
+
+        # 解析背景色
+        bg_rgba = self._parse_color(bg_color)
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        
+
         # 气泡背景
         bubble_rect = self.rect().adjusted(0, 0, 0, -10)
-        
-        painter.setPen(QPen(QColor("#E0D0F0"), 1.5))
-        painter.setBrush(QBrush(QColor(255, 255, 255, 240)))
-        
+
+        painter.setPen(QPen(QColor(border_color), 1.5))
+        painter.setBrush(QBrush(QColor(*bg_rgba)))
+
         path = QPainterPath()
-        r = 10
         path.addRoundedRect(bubble_rect.x(), bubble_rect.y(),
-                           bubble_rect.width(), bubble_rect.height(), r, r)
-        
+                           bubble_rect.width(), bubble_rect.height(), radius, radius)
+
         # 底部三角箭头（指向宠物）
         tri_x = self.width() // 2
         tri_top = bubble_rect.y() + bubble_rect.height()
         path.moveTo(tri_x - 6, tri_top)
         path.lineTo(tri_x, tri_top + 10)
         path.lineTo(tri_x + 6, tri_top)
-        
+
         painter.drawPath(path)
-        
+
         # 绘制文字
         font = QFont("Microsoft YaHei", 10)
         painter.setFont(font)
-        painter.setPen(QColor("#2D2D2D"))
-        
+        painter.setPen(QColor(text_color))
+
         padding = 12
         painter.drawText(
             bubble_rect.x() + padding,
@@ -134,5 +144,23 @@ class GreetingBubble(QWidget):
             bubble_rect.height() - padding * 2,
             Qt.TextWordWrap, self._text
         )
-        
+
         painter.end()
+
+    @staticmethod
+    def _parse_color(color_str: str) -> tuple:
+        """解析颜色字符串为 (r, g, b, a) 元组。"""
+        s = color_str.strip()
+        if s.startswith("rgba("):
+            s = s[5:-1]
+            return tuple(int(x.strip()) for x in s.split(","))
+        elif s.startswith("rgb("):
+            s = s[4:-1]
+            return (*tuple(int(x.strip()) for x in s.split(",")), 255)
+        elif s.startswith("#"):
+            s = s.lstrip('#')
+            if len(s) == 6:
+                return int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16), 255
+            elif len(s) == 8:
+                return int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16), int(s[6:8], 16)
+        return (255, 255, 255, 240)
