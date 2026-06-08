@@ -29,6 +29,7 @@ class PetWindow(QWidget):
     SKINS = {
         "小天使": "angel_sprite.png",
         "帅仓鼠": "hamster.png",
+        "CodeNoNo": "codenono_spritesheet.png",
     }
 
     # 皮肤文件名 → 精灵目录（相对于 assets/）的映射
@@ -37,6 +38,7 @@ class PetWindow(QWidget):
         "angel_sprite.png": "sprites",
         "angel_sprite_o.png": "sprites",
         "win大师.png": "sprites",
+        "codenono_spritesheet.png": "sprites_codenono",
     }
 
     def __init__(self, parent=None):
@@ -89,8 +91,10 @@ class PetWindow(QWidget):
 
         # 拖拽跳跃检测
         self._drag_start_y: int | None = None
+        self._drag_start_x: int | None = None  # 水平拖拽起点（CodeNoNo 侧向跑用）
         self._is_dragging_up: bool = False
         self._jump_offset_y: int = 0  # 跳跃时形象上移偏移
+        self._side_run_active: bool = False  # 是否正在侧向跑（CodeNoNo）
 
         # 放置到屏幕右下角
         screen = QApplication.primaryScreen().availableGeometry()
@@ -264,12 +268,15 @@ class PetWindow(QWidget):
     # ── 思考动画控制 ──
 
     def start_thinking(self):
-        """开始思考：先讲话第一帧，2秒后切到跑步循环"""
+        """开始思考：CodeNoNo 用 waiting，其他皮肤先 talk 第一帧再切换跑步"""
         self._thinking = True
         if self._sprite_animator:
-            self._sprite_animator.set_talk_first()
-            # 2秒后切到跑步
-            QTimer.singleShot(2000, self._switch_to_run)
+            if self.is_codenono():
+                self._sprite_animator.start_waiting()
+            else:
+                self._sprite_animator.set_talk_first()
+                # 2秒后切到跑步
+                QTimer.singleShot(2000, self._switch_to_run)
         self.update()
 
     def _switch_to_run(self):
@@ -278,10 +285,13 @@ class PetWindow(QWidget):
             self._sprite_animator.start_run()
 
     def stop_thinking(self):
-        """停止思考：回到 idle"""
+        """停止思考：CodeNoNo 停止侧向跑，所有皮肤回到 idle"""
         self._thinking = False
         if self._sprite_animator:
-            self._sprite_animator.set_idle()
+            if self.is_codenono():
+                self._sprite_animator.stop_run_side()
+            else:
+                self._sprite_animator.set_idle()
         self.update()
 
     def set_talk_last(self):
@@ -295,6 +305,63 @@ class PetWindow(QWidget):
         if self._sprite_animator:
             self._sprite_animator.set_special_6()
             self.update()
+
+    # ── CodeNoNo 状态触发 ──
+
+    def start_waving(self):
+        """挥手动作"""
+        if self._sprite_animator:
+            self._sprite_animator.start_waving()
+            self.update()
+
+    def start_failed(self):
+        """失败动作"""
+        if self._sprite_animator:
+            self._sprite_animator.start_failed()
+            self.update()
+
+    def start_waiting(self):
+        """等待动作"""
+        if self._sprite_animator:
+            self._sprite_animator.start_waiting()
+            self.update()
+
+    def start_review(self):
+        """审核动作"""
+        if self._sprite_animator:
+            self._sprite_animator.start_review()
+            self.update()
+
+    def start_run_left(self):
+        """向左跑（循环）"""
+        if self._sprite_animator:
+            self._sprite_animator.start_run_left()
+            self.update()
+
+    def start_run_right(self):
+        """向右跑（循环）"""
+        if self._sprite_animator:
+            self._sprite_animator.start_run_right()
+            self.update()
+
+    def stop_run_side(self):
+        """停止侧向跑，回到 idle"""
+        if self._sprite_animator:
+            self._sprite_animator.stop_run_side()
+            self.update()
+
+    def on_error(self):
+        """出错：CodeNoNo 播放 failed 动画，其他皮肤停止思考"""
+        if self.is_codenono():
+            if self._sprite_animator:
+                self._sprite_animator.start_failed()
+                self.update()
+        else:
+            self.stop_thinking()
+
+    def is_codenono(self) -> bool:
+        """当前是否为 CodeNoNo 皮肤"""
+        return self._current_skin == "codenono_spritesheet.png" or self._current_skin == "CodeNoNo"
 
     # ── 问候气泡 ──
 
@@ -357,6 +424,7 @@ class PetWindow(QWidget):
         if event.button() == Qt.LeftButton:
             self._drag_pos = event.globalPos() - self.frameGeometry().topLeft()
             self._drag_start_y = event.globalPos().y()
+            self._drag_start_x = event.globalPos().x()  # CodeNoNo 水平拖拽用
             self._drag_moved = False
             self._is_dragging_up = False
             self._jump_offset_y = 0  # 跳跃上移偏移
@@ -377,6 +445,19 @@ class PetWindow(QWidget):
                 if self._is_dragging_up:
                     self._jump_offset_y = min(dy - 30, 40)
                     self.update()
+            # ── CodeNoNo 水平拖拽检测 ──
+            if self.is_codenono() and self._drag_start_x is not None:
+                dx = self._drag_start_x - event.globalPos().x()  # 正=向左拖
+                if dx > 30 and not self._side_run_active:
+                    self._side_run_active = True
+                    if self._sprite_animator:
+                        self._sprite_animator.start_run_left()
+                        self.update()
+                elif dx < -30 and not self._side_run_active:
+                    self._side_run_active = True
+                    if self._sprite_animator:
+                        self._sprite_animator.start_run_right()
+                        self.update()
             event.accept()
 
     def mouseReleaseEvent(self, event):
@@ -388,17 +469,29 @@ class PetWindow(QWidget):
                 self._sprite_animator.release_jump()
                 self._jump_offset_y = 0
                 self.update()
+            # ── CodeNoNo 停止侧向跑 ──
+            if self.is_codenono() and self._side_run_active:
+                self._side_run_active = False
+                if self._sprite_animator:
+                    self._sprite_animator.stop_run_side()
+                    self.update()
             self._drag_pos = None
             self._drag_start_y = None
+            self._drag_start_x = None
             self._is_dragging_up = False
             event.accept()
 
     def _on_click(self):
-        """点击角色：随机播放特殊动作 004/006/007"""
-        if self._sprite_animator and 'special' in self._sprite_animator.available_actions:
-            idx = random.choice([4, 6, 7])
-            self._sprite_animator._enter_state(PetState.SPECIAL, idx)
-        self.show_greeting()
+        """点击角色：CodeNoNo 挥手，其他皮肤随机特殊动作"""
+        if self.is_codenono():
+            if self._sprite_animator and 'waving' in self._sprite_animator.available_actions:
+                self._sprite_animator.start_waving()
+            self.show_greeting()
+        else:
+            if self._sprite_animator and 'special' in self._sprite_animator.available_actions:
+                idx = random.choice([4, 6, 7])
+                self._sprite_animator._enter_state(PetState.SPECIAL, idx)
+            self.show_greeting()
 
     def _get_menu_stylesheet(self) -> str:
         """返回基于当前主题的右键菜单样式表。"""

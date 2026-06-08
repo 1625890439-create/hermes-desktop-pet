@@ -34,6 +34,13 @@ class PetState(Enum):
     SPECIAL_6 = "special_6"
     RUN = "run"
     BLINK = "blink"
+    # CodeNoNo 新增状态
+    WAVING = "waving"
+    FAILED = "failed"
+    WAITING = "waiting"
+    REVIEW = "review"
+    RUN_LEFT = "run_left"
+    RUN_RIGHT = "run_right"
 
 
 class SpriteAnimator:
@@ -48,6 +55,10 @@ class SpriteAnimator:
     # 循环动画帧持续时间
     RUN_FRAME_DURATION = 0.5
     BLINK_FRAME_DURATION = 0.8
+
+    # CodeNoNo 一次性动画帧持续时间
+    ONE_SHOT_FRAME_DURATION = 0.5  # waving/failed/waiting/review 共用
+    RUN_SIDE_FRAME_DURATION = 0.4  # run-left/run-right
 
     # 眨眼循环次数（播完后回 idle）
     BLINK_LOOP_CYCLES = 1
@@ -136,6 +147,19 @@ class SpriteAnimator:
             return "run", self._current_frame_index
         elif self._state == PetState.BLINK:
             return "blink", self._current_frame_index
+        # CodeNoNo 新状态
+        elif self._state == PetState.WAVING:
+            return "waving", self._current_frame_index
+        elif self._state == PetState.FAILED:
+            return "failed", self._current_frame_index
+        elif self._state == PetState.WAITING:
+            return "waiting", self._current_frame_index
+        elif self._state == PetState.REVIEW:
+            return "review", self._current_frame_index
+        elif self._state == PetState.RUN_LEFT:
+            return "running-left", self._current_frame_index
+        elif self._state == PetState.RUN_RIGHT:
+            return "running-right", self._current_frame_index
         return "idle", 0
 
     def get_idle_frame(self) -> Optional[QPixmap]:
@@ -258,6 +282,33 @@ class SpriteAnimator:
                         # 循环次数够了，回 idle
                         self._enter_state(PetState.IDLE)
 
+        # CodeNoNo 一次性动画：waving/failed/waiting/review
+        elif self._state in (PetState.WAVING, PetState.FAILED, PetState.WAITING, PetState.REVIEW):
+            self._frame_timer += dt
+            if self._frame_timer >= self.ONE_SHOT_FRAME_DURATION:
+                self._frame_timer -= self.ONE_SHOT_FRAME_DURATION
+                frames = self._frames.get(self._state.value.replace("run_left", "running-left").replace("run_right", "running-right"), [])
+                if not frames:
+                    frames_map = {
+                        PetState.WAVING: self._frames.get("waving", []),
+                        PetState.FAILED: self._frames.get("failed", []),
+                        PetState.WAITING: self._frames.get("waiting", []),
+                        PetState.REVIEW: self._frames.get("review", []),
+                    }
+                    frames = frames_map.get(self._state, [])
+                self._current_frame_index += 1
+                if self._current_frame_index >= len(frames):
+                    self._enter_state(PetState.IDLE)
+
+        # CodeNoNo 侧向跑：循环播放
+        elif self._state in (PetState.RUN_LEFT, PetState.RUN_RIGHT):
+            self._frame_timer += dt
+            if self._frame_timer >= self.RUN_SIDE_FRAME_DURATION:
+                self._frame_timer -= self.RUN_SIDE_FRAME_DURATION
+                key = "running-left" if self._state == PetState.RUN_LEFT else "running-right"
+                frames = self._frames.get(key, [])
+                self._current_frame_index = (self._current_frame_index + 1) % max(len(frames), 1)
+
         # TALK_FIRST, TALK_LAST, SPECIAL_6 静态帧
 
     def _trigger_random_special(self):
@@ -276,3 +327,40 @@ class SpriteAnimator:
         self._blink_loop_count = 0
         self._enter_state(PetState.BLINK, 0)
         self._next_blink_time = random.uniform(5.0, 15.0)  # 预设下次眨眼时间
+
+    # ── CodeNoNo 状态触发 ──
+
+    def start_waving(self):
+        """挥手动作（一圈后回 idle）"""
+        if 'waving' in self._frames and self._frames['waving']:
+            self._enter_state(PetState.WAVING, 0)
+
+    def start_failed(self):
+        """失败动作（一圈后回 idle）"""
+        if 'failed' in self._frames and self._frames['failed']:
+            self._enter_state(PetState.FAILED, 0)
+
+    def start_waiting(self):
+        """等待动作（一圈后回 idle）"""
+        if 'waiting' in self._frames and self._frames['waiting']:
+            self._enter_state(PetState.WAITING, 0)
+
+    def start_review(self):
+        """审核动作（一圈后回 idle）"""
+        if 'review' in self._frames and self._frames['review']:
+            self._enter_state(PetState.REVIEW, 0)
+
+    def start_run_left(self):
+        """向左跑（循环）"""
+        if 'running-left' in self._frames and self._frames['running-left']:
+            self._enter_state(PetState.RUN_LEFT, 0)
+
+    def start_run_right(self):
+        """向右跑（循环）"""
+        if 'running-right' in self._frames and self._frames['running-right']:
+            self._enter_state(PetState.RUN_RIGHT, 0)
+
+    def stop_run_side(self):
+        """停止侧向跑，回到 idle"""
+        if self._state in (PetState.RUN_LEFT, PetState.RUN_RIGHT):
+            self._enter_state(PetState.IDLE)

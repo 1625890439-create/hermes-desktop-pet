@@ -1,0 +1,47 @@
+{
+  "idle": {
+    "fps": 4,
+    "loop": true,
+    "frames": ["00.png","01.png","02.png","03.png","04.png","05.png"]
+  },
+  "running": {
+    "fps": 8,
+    "loop": true,
+    "frames": ["00.png","01.png","02.png","03.png","04.png","05.png"]
+  },
+  "running-left": {
+    "fps": 8,
+    "loop": true,
+    "frames": ["00.png","01.png","02.png","03.png","04.png","05.png","06.png","07.png"]
+  },
+  "running-right": {
+    "fps": 8,
+    "loop": true,
+    "frames": ["00.png","01.png","02.png","03.png","04.png","05.png","06.png","07.png"]
+  },
+  "waving": {
+    "fps": 6,
+    "loop": false,
+    "frames": ["00.png","01.png","02.png","03.png"]
+  },
+  "jump": {
+    "fps": 10,
+    "loop": false,
+    "frames": ["00.png","01.png","02.png","03.png","04.png"]
+  },
+  "failed": {
+    "fps": 6,
+    "loop": false,
+    "frames": ["00.png","01.png","02.png","03.png","04.png","05.png","06.png","07.png"]
+  },
+  "waiting": {
+    "fps": 4,
+    "loop": false,
+    "frames": ["00.png","01.png","02.png","03.png","04.png","05.png"]
+  },
+  "review": {
+    "fps": 6,
+    "loop": false,
+    "frames": ["00.png","01.png","02.png","03.png","04.png","05.png"]
+  }
+}

@@ -111,6 +111,8 @@ def main():
     # ── 宠物点击 → 切换聊天窗口 ──
 
     def on_pet_click():
+        if pet.is_codenono():
+            pet.start_waving()
         chat.toggle_visibility()
 
     def on_hide_all():
@@ -194,7 +196,7 @@ def main():
         """API 请求出错。"""
         chat.finish_streaming()
         chat.add_error_message(err)
-        pet.stop_thinking()
+        pet.on_error()
         chat._send_btn.setEnabled(True)
         chat._send_btn.setText("发送")
         logger.error("API 错误: %s", err)
